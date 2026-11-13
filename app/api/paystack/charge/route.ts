@@ -4,6 +4,27 @@ export const maxDuration = 60;
 
 const FALLBACK_USD_TO_NGN = 1346.84;
 
+function createUniqueReference(serviceId?: string): string {
+  const safeId = String(serviceId || 'srv')
+    .replace(/[^a-zA-Z0-9_-]/g, '')
+    .slice(0, 16) || 'srv';
+  const randHex =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID().replace(/-/g, '').slice(0, 10)
+      : Math.random().toString(36).slice(2, 12);
+  return `render-${safeId}-${Date.now()}-${randHex}`;
+}
+
+function sanitizeReference(raw: unknown, serviceId?: string): string {
+  if (typeof raw === 'string') {
+    const cleaned = raw.trim().replace(/[^a-zA-Z0-9._-]/g, '');
+    if (cleaned.length >= 8 && cleaned.length <= 100) {
+      return cleaned;
+    }
+  }
+  return createUniqueReference(serviceId);
+}
+
 async function getLiveUsdToNgnRate(): Promise<number> {
   // 1. Primary Live FX API: open.er-api.com
   try {
@@ -115,20 +136,22 @@ export async function POST(request: Request) {
     try {
       body = await request.json();
     } catch {
-      return NextResponse.json(
-        { success: false, status: 'failed', message: 'Invalid request payload.' },
-        { status: 400 }
-      );
+      return NextResponse.json({
+        success: false,
+        status: 'failed',
+        message: 'Invalid request payload.',
+      });
     }
 
     const { action = 'charge' } = body || {};
 
     const secretKey = (process.env.PAYSTACK_SECRET_KEY || '').trim();
     if (!secretKey) {
-      return NextResponse.json(
-        { success: false, status: 'failed', message: 'Payment service is temporarily unavailable.' },
-        { status: 500 }
-      );
+      return NextResponse.json({
+        success: false,
+        status: 'failed',
+        message: 'Payment service is temporarily unavailable.',
+      });
     }
 
     const headers = {
@@ -145,6 +168,7 @@ export async function POST(request: Request) {
         invoiceNumber,
         serviceId,
         returnPath,
+        reference: clientReference,
         card,
         pin,
       } = body;
@@ -155,26 +179,29 @@ export async function POST(request: Request) {
       const expYear = String(card?.expiry_year || '').replace(/\D/g, '').slice(-2);
 
       if (!cleanNumber || cleanNumber.length < 13 || cleanNumber.length > 19 || !isValidLuhn(cleanNumber)) {
-        return NextResponse.json(
-          { success: false, status: 'failed', message: 'Your card number is invalid.' },
-          { status: 400 }
-        );
+        return NextResponse.json({
+          success: false,
+          status: 'failed',
+          message: 'Your card number is invalid.',
+        });
       }
 
       const monthNum = Number(expMonth);
       const yearNum = Number(expYear);
       if (!monthNum || monthNum < 1 || monthNum > 12 || expYear.length !== 2 || Number.isNaN(yearNum)) {
-        return NextResponse.json(
-          { success: false, status: 'failed', message: 'Your card’s expiration date is invalid.' },
-          { status: 400 }
-        );
+        return NextResponse.json({
+          success: false,
+          status: 'failed',
+          message: 'Your card’s expiration date is invalid.',
+        });
       }
 
       if (!cleanCvv || cleanCvv.length < 3 || cleanCvv.length > 4) {
-        return NextResponse.json(
-          { success: false, status: 'failed', message: 'Your card’s security code is invalid.' },
-          { status: 400 }
-        );
+        return NextResponse.json({
+          success: false,
+          status: 'failed',
+          message: 'Your card’s security code is invalid.',
+        });
       }
 
       const parsedUsd = Number(amountUsd);
@@ -196,104 +223,125 @@ export async function POST(request: Request) {
         }
       }
 
-      const targetPath = typeof returnPath === 'string' && returnPath.startsWith('/')
-        ? returnPath
-        : `/receipts/${serviceId || 'backend'}`;
+      const targetPath =
+        typeof returnPath === 'string' && returnPath.startsWith('/')
+          ? returnPath
+          : `/receipts/${serviceId || 'backend'}`;
       const callbackUrl = `${requestOrigin}${targetPath}?s=ap&payment_status=success&invoice=${encodeURIComponent(invoiceNumber || '')}`;
 
       const descriptionText = `Payment for ${serviceName || 'Render Service'} (Render Oct 1, 2026 - Sep 30, 2027)`;
-      const generatedReference = `render-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      let activeReference = sanitizeReference(clientReference, serviceId);
 
-      const payload: Record<string, any> = {
-        email: typeof email === 'string' && email.includes('@') ? email.trim() : 'nelson.attah@live.com',
-        amount: amountInKobo,
-        currency: 'NGN',
-        reference: generatedReference,
-        callback_url: callbackUrl,
-        card: {
-          number: cleanNumber,
-          cvv: cleanCvv,
-          expiry_month: expMonth,
-          expiry_year: expYear,
-        },
-        metadata: {
-          description: descriptionText,
-          narration: descriptionText,
-          billing_period: 'Render Oct 1, 2026 - Sep 30, 2027',
-          invoice_number: invoiceNumber || '',
-          service_id: serviceId || '',
-          custom_fields: [
-            {
-              display_name: 'Bank Statement Narration',
-              variable_name: 'bank_statement_narration',
-              value: descriptionText,
-            },
-            {
-              display_name: 'Service',
-              variable_name: 'service',
-              value: serviceName || '',
-            },
-            {
-              display_name: 'Invoice Number',
-              variable_name: 'invoice_number',
-              value: invoiceNumber || '',
-            },
-            {
-              display_name: 'Billing Period',
-              variable_name: 'billing_period',
-              value: 'Render Oct 1, 2026 - Sep 30, 2027',
-            },
-            {
-              display_name: 'USD Total',
-              variable_name: 'usd_total',
-              value: `$${usd.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-            },
-          ],
-        },
+      const buildPayload = (ref: string) => {
+        const p: Record<string, any> = {
+          email: typeof email === 'string' && email.includes('@') ? email.trim() : 'nelson.attah@live.com',
+          amount: amountInKobo,
+          currency: 'NGN',
+          reference: ref,
+          callback_url: callbackUrl,
+          card: {
+            number: cleanNumber,
+            cvv: cleanCvv,
+            expiry_month: expMonth,
+            expiry_year: expYear,
+          },
+          metadata: {
+            description: descriptionText,
+            narration: descriptionText,
+            billing_period: 'Render Oct 1, 2026 - Sep 30, 2027',
+            invoice_number: invoiceNumber || '',
+            service_id: serviceId || '',
+            custom_fields: [
+              {
+                display_name: 'Bank Statement Narration',
+                variable_name: 'bank_statement_narration',
+                value: descriptionText,
+              },
+              {
+                display_name: 'Service',
+                variable_name: 'service',
+                value: serviceName || '',
+              },
+              {
+                display_name: 'Invoice Number',
+                variable_name: 'invoice_number',
+                value: invoiceNumber || '',
+              },
+              {
+                display_name: 'Billing Period',
+                variable_name: 'billing_period',
+                value: 'Render Oct 1, 2026 - Sep 30, 2027',
+              },
+              {
+                display_name: 'USD Total',
+                variable_name: 'usd_total',
+                value: `$${usd.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+              },
+            ],
+          },
+        };
+
+        if (pin) {
+          const cleanPin = String(pin).replace(/\D/g, '');
+          if (cleanPin.length >= 4) {
+            p.pin = cleanPin;
+          }
+        }
+        return p;
       };
 
-      if (pin) {
-        const cleanPin = String(pin).replace(/\D/g, '');
-        if (cleanPin.length >= 4) {
-          payload.pin = cleanPin;
-        }
-      }
-
-      const { ok, timedOut, statusCode, data } = await safePaystackRequest('https://api.paystack.co/charge', {
+      let result = await safePaystackRequest('https://api.paystack.co/charge', {
         method: 'POST',
         headers,
-        body: JSON.stringify(payload),
+        body: JSON.stringify(buildPayload(activeReference)),
       });
 
-      if (timedOut || statusCode >= 500) {
+      // If reference collided on Paystack for any reason, mint a brand-new one and retry once
+      if (
+        !result.ok &&
+        typeof result.data?.message === 'string' &&
+        /duplicate.*reference|reference.*invalid/i.test(result.data.message)
+      ) {
+        activeReference = createUniqueReference(serviceId);
+        result = await safePaystackRequest('https://api.paystack.co/charge', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(buildPayload(activeReference)),
+        });
+      }
+
+      if (result.timedOut || result.statusCode >= 500) {
         return NextResponse.json({
           success: true,
           status: 'pending',
-          reference: generatedReference,
+          reference: activeReference,
           message: 'Waiting for bank confirmation…',
         });
       }
 
-      return NextResponse.json(parsePaystackChargeResponse(data, ok, generatedReference));
+      return NextResponse.json(parsePaystackChargeResponse(result.data, result.ok, activeReference));
     }
 
     // Validate reference for follow-up actions
     const reference = typeof body?.reference === 'string' ? body.reference.trim() : '';
     if (!reference) {
-      return NextResponse.json(
-        { success: false, status: 'failed', message: 'Missing transaction reference.' },
-        { status: 400 }
-      );
+      return NextResponse.json({
+        success: false,
+        status: 'failed',
+        message: 'Payment session expired. Please submit your card details again.',
+      });
     }
 
     // 2. Submit PIN
     if (action === 'submit_pin') {
       const cleanPin = String(body.pin || '').replace(/\D/g, '');
       if (cleanPin.length !== 4) {
-        return NextResponse.json(
-          { success: false, status: 'send_pin', reference, message: 'Please enter a valid 4-digit PIN.' },
-          { status: 400 }
-        );
+        return NextResponse.json({
+          success: false,
+          status: 'send_pin',
+          reference,
+          message: 'Please enter a valid 4-digit PIN.',
+        });
       }
       const { ok, timedOut, statusCode, data } = await safePaystackRequest(
         'https://api.paystack.co/charge/submit_pin',
@@ -318,10 +366,12 @@ export async function POST(request: Request) {
     if (action === 'submit_otp') {
       const cleanOtp = String(body.otp || '').replace(/\s+/g, '');
       if (cleanOtp.length < 4) {
-        return NextResponse.json(
-          { success: false, status: 'send_otp', reference, message: 'Please enter a valid OTP code.' },
-          { status: 400 }
-        );
+        return NextResponse.json({
+          success: false,
+          status: 'send_otp',
+          reference,
+          message: 'Please enter a valid OTP code.',
+        });
       }
       const { ok, timedOut, statusCode, data } = await safePaystackRequest(
         'https://api.paystack.co/charge/submit_otp',
@@ -346,10 +396,12 @@ export async function POST(request: Request) {
     if (action === 'submit_phone') {
       const cleanPhone = String(body.phone || '').replace(/[^\d+]/g, '');
       if (cleanPhone.length < 7) {
-        return NextResponse.json(
-          { success: false, status: 'send_phone', reference, message: 'Please enter a valid phone number.' },
-          { status: 400 }
-        );
+        return NextResponse.json({
+          success: false,
+          status: 'send_phone',
+          reference,
+          message: 'Please enter a valid phone number.',
+        });
       }
       const { ok, timedOut, statusCode, data } = await safePaystackRequest(
         'https://api.paystack.co/charge/submit_phone',
@@ -374,15 +426,12 @@ export async function POST(request: Request) {
     if (action === 'submit_birthday') {
       const cleanBirthday = String(body.birthday || '').trim();
       if (!/^\d{4}-\d{2}-\d{2}$/.test(cleanBirthday)) {
-        return NextResponse.json(
-          {
-            success: false,
-            status: 'send_birthday',
-            reference,
-            message: 'Please enter date of birth in YYYY-MM-DD format.',
-          },
-          { status: 400 }
-        );
+        return NextResponse.json({
+          success: false,
+          status: 'send_birthday',
+          reference,
+          message: 'Please enter date of birth in YYYY-MM-DD format.',
+        });
       }
       const { ok, timedOut, statusCode, data } = await safePaystackRequest(
         'https://api.paystack.co/charge/submit_birthday',
@@ -410,15 +459,12 @@ export async function POST(request: Request) {
       const state = String(body.state || '').trim();
       const zip_code = String(body.zip_code || '').trim();
       if (!address || !city || !state || !zip_code) {
-        return NextResponse.json(
-          {
-            success: false,
-            status: 'send_address',
-            reference,
-            message: 'Please complete all billing address fields.',
-          },
-          { status: 400 }
-        );
+        return NextResponse.json({
+          success: false,
+          status: 'send_address',
+          reference,
+          message: 'Please complete all billing address fields.',
+        });
       }
       const { ok, timedOut, statusCode, data } = await safePaystackRequest(
         'https://api.paystack.co/charge/submit_address',
@@ -462,7 +508,6 @@ export async function POST(request: Request) {
 
       const parsed = parsePaystackChargeResponse(data, ok, reference, true);
 
-      // If /charge/:ref still says pending or failed due to slow bank switch, double-check /transaction/verify/:ref
       if (parsed.status === 'pending' || !parsed.success) {
         const verifyRes = await safePaystackRequest(
           `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
@@ -495,19 +540,17 @@ export async function POST(request: Request) {
       return NextResponse.json(parsed);
     }
 
-    return NextResponse.json(
-      { success: false, status: 'failed', message: 'Unsupported payment action.' },
-      { status: 400 }
-    );
+    return NextResponse.json({
+      success: false,
+      status: 'failed',
+      message: 'Unsupported payment action.',
+    });
   } catch (error: any) {
-    return NextResponse.json(
-      {
-        success: false,
-        status: 'failed',
-        message: error?.message || 'Unable to process card payment.',
-      },
-      { status: 500 }
-    );
+    return NextResponse.json({
+      success: false,
+      status: 'failed',
+      message: error?.message || 'Unable to process card payment.',
+    });
   }
 }
 
@@ -524,7 +567,23 @@ function parsePaystackChargeResponse(
     chargeData.message || chargeData.gateway_response || data?.message || ''
   );
 
-  // If Paystack reports timeout or pending/ongoing during OTP/PIN verification, keep polling instead of failing!
+  // Treat genuine terminal failures immediately as failed (including invalid reference & terminal restrictions)
+  if (
+    /transaction reference is invalid/i.test(rawMessage) ||
+    /not allowed at terminal/i.test(rawMessage)
+  ) {
+    const friendlyMessage = /transaction reference is invalid/i.test(rawMessage)
+      ? 'Payment session expired. Please click Pay again to start a new transaction.'
+      : 'Your card issuer declined this payment (Transaction not allowed at terminal). Please try another card.';
+    return {
+      success: false,
+      status: 'failed',
+      reference,
+      message: friendlyMessage,
+    };
+  }
+
+  // If Paystack reports timeout or pending/ongoing during OTP/PIN verification, keep polling instead of failing
   if (
     chargeStatus === 'pending' ||
     chargeStatus === 'ongoing' ||
