@@ -12,6 +12,12 @@ import type { NextConfig } from 'next';
 const nextConfig: NextConfig = {
   async rewrites() {
     return [
+      // ── Backend Test ($0.24 / $0.20 per month) ───────────────────────────
+      {
+        source:
+          '/i/acct_1CTbIsBmBV2o9vP5/live_VGVzdEJhY2tlbmRTZXJ2ZXJQcm9NYXgxNkdCNENQVV8wMjRVU0RfT2N0MjAyNlNlcDIwMjdfOTk4ODc3NjY1NQ',
+        destination: '/receipts/backend-test',
+      },
       // ── Backend ──────────────────────────────────────────────────────────
       {
         source:

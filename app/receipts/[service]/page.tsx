@@ -4,15 +4,15 @@ import ReceiptPage, { ReceiptItem } from '@/components/receipt-page';
 export const dynamicParams = false;
 
 export const receipts: Record<string, ReceiptItem> = {
-  // backend: {
-  //   id: 'backend',
-  //   name: 'Render Backend Server (Pro Max, 16GB/4CPU)',
-  //   qty: 1,
-  //   unitPriceStr: '$350.0000',
-  //   monthly: 0.1,
-  //   total: 0.12,
-  //   scrambledPath: '/i/acct_1CTbIsBmBV2o9vP5/live_YWNjdF8xQ1RiSXNCbUJWMm85dlA1LF9WWHpkbFBsOU9SOHZpaVBTc2tScXNodTdENUNxaWtrLDE4NTA3Mzg5OQ02007pBkRHH1',
-  // },
+  'backend-test': {
+    id: 'backend-test',
+    name: 'Render Backend Server (Pro Max, 16GB/4CPU)',
+    qty: 1,
+    unitPriceStr: '$0.2000',
+    monthly: 0.2,
+    total: 0.24,
+    scrambledPath: '/i/acct_1CTbIsBmBV2o9vP5/live_VGVzdEJhY2tlbmRTZXJ2ZXJQcm9NYXgxNkdCNENQVV8wMjRVU0RfT2N0MjAyNlNlcDIwMjdfOTk4ODc3NjY1NQ',
+  },
   backend: {
     id: 'backend',
     name: 'Render Backend Server (Pro Max, 16GB/4CPU)',
