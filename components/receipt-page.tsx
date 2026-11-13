@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import {
   VisaIcon,
@@ -181,20 +180,6 @@ function ReceiptPageContent({ receipt, allReceipts }: Props) {
 
   return (
     <div className="app-container">
-      {/* Discreet floating switcher at bottom right */}
-      <nav className="floating-receipt-pill" aria-label="Switch receipt">
-        <span style={{ color: '#8792a2', fontWeight: 500 }}>Receipts:</span>
-        {allReceipts.map((item, idx) => (
-          <Link
-            key={item.id}
-            href={`${item.scrambledPath}?s=ap`}
-            className={`floating-pill-link ${item.id === receipt.id ? 'active' : ''}`}
-          >
-            {idx + 1}. {item.id.charAt(0).toUpperCase() + item.id.slice(1)} ({formatUSD(item.total)})
-          </Link>
-        ))}
-      </nav>
-
       {/* Main Content Area */}
       <div className={`main-viewport ${isDrawerOpen ? 'drawer-is-open' : ''}`}>
         <main className="invoice-column-wrapper">

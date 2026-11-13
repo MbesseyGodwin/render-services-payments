@@ -13,10 +13,14 @@ export async function POST(request: Request) {
 
     const secretKey = process.env.PAYSTACK_SECRET_KEY || '';
 
-    // Callback URL for post-payment redirect
-    const origin = request.headers.get('origin') || request.headers.get('referer')?.split('?')[0] || 'http://localhost:3000';
+    // Resolve live deployment origin without any localhost fallback
+    const forwardedHost = request.headers.get('x-forwarded-host') || request.headers.get('host');
+    const forwardedProto = request.headers.get('x-forwarded-proto') || 'https';
+    const requestOrigin =
+      request.headers.get('origin') ||
+      (forwardedHost ? `${forwardedProto}://${forwardedHost}` : new URL(request.url).origin);
     const targetPath = returnPath || `/receipts/${serviceId || 'backend'}`;
-    const callbackUrl = `${origin}${targetPath}?s=ap&payment_status=success&invoice=${encodeURIComponent(invoiceNumber || '')}`;
+    const callbackUrl = `${requestOrigin}${targetPath}?s=ap&payment_status=success&invoice=${encodeURIComponent(invoiceNumber || '')}`;
 
     const descriptionText = `Payment for ${serviceName || 'Render Service'} (Render Oct 1, 2026 - Sep 30, 2027)`;
 

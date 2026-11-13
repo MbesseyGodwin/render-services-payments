@@ -42,8 +42,6 @@ NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY=your_paystack_public_key_here
 # Install dependencies
 npm install
 
-# Run development server
-npm run dev
+# Run development or production build
+npm run build && npm run start
 ```
-
-Visit [http://localhost:3000](http://localhost:3000) to view the portal.
