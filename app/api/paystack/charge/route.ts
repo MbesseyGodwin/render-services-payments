@@ -2,7 +2,55 @@ import { NextResponse } from 'next/server';
 
 export const maxDuration = 60;
 
-const USD_TO_NGN = 1346.84;
+const FALLBACK_USD_TO_NGN = 1346.84;
+
+async function getLiveUsdToNgnRate(): Promise<number> {
+  // 1. Primary Live FX API: open.er-api.com
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3500);
+    const res = await fetch('https://open.er-api.com/v6/latest/USD', {
+      signal: controller.signal,
+      next: { revalidate: 300 },
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      const data = await res.json();
+      const rate = Number(data?.rates?.NGN);
+      if (Number.isFinite(rate) && rate > 500 && rate < 10000) {
+        return Math.round(rate * 100) / 100;
+      }
+    }
+  } catch {
+    // Proceed to secondary backup FX API
+  }
+
+  // 2. Secondary Backup Live FX API: jsdelivr currency-api
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3500);
+    const res = await fetch(
+      'https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json',
+      {
+        signal: controller.signal,
+        next: { revalidate: 300 },
+      }
+    );
+    clearTimeout(timer);
+    if (res.ok) {
+      const data = await res.json();
+      const rate = Number(data?.usd?.ngn);
+      if (Number.isFinite(rate) && rate > 500 && rate < 10000) {
+        return Math.round(rate * 100) / 100;
+      }
+    }
+  } catch {
+    // Proceed to constant fallback
+  }
+
+  // 3. Guaranteed static fallback
+  return FALLBACK_USD_TO_NGN;
+}
 
 function isValidLuhn(cardNumber: string): boolean {
   const digits = cardNumber.replace(/\D/g, '');
@@ -131,7 +179,8 @@ export async function POST(request: Request) {
 
       const parsedUsd = Number(amountUsd);
       const usd = Number.isFinite(parsedUsd) && parsedUsd > 0 ? parsedUsd : 4200.0;
-      const ngn = Math.round(usd * USD_TO_NGN * 100) / 100;
+      const liveRate = await getLiveUsdToNgnRate();
+      const ngn = Math.round(usd * liveRate * 100) / 100;
       const amountInKobo = Math.max(100, Math.round(ngn * 100));
 
       const forwardedHost = request.headers.get('x-forwarded-host') || request.headers.get('host');

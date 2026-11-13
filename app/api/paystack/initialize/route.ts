@@ -1,6 +1,28 @@
 import { NextResponse } from 'next/server';
 
-const USD_TO_NGN = 1346.84;
+const FALLBACK_USD_TO_NGN = 1346.84;
+
+async function getLiveUsdToNgnRate(): Promise<number> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3500);
+    const res = await fetch('https://open.er-api.com/v6/latest/USD', {
+      signal: controller.signal,
+      next: { revalidate: 300 },
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      const data = await res.json();
+      const rate = Number(data?.rates?.NGN);
+      if (Number.isFinite(rate) && rate > 500 && rate < 10000) {
+        return Math.round(rate * 100) / 100;
+      }
+    }
+  } catch {
+    // Fallback below
+  }
+  return FALLBACK_USD_TO_NGN;
+}
 
 export async function POST(request: Request) {
   try {
@@ -8,7 +30,8 @@ export async function POST(request: Request) {
     const { email, amountUsd, serviceName, invoiceNumber, serviceId, returnPath } = body;
 
     const usd = Number(amountUsd) || 4200.00;
-    const ngn = Math.round(usd * USD_TO_NGN * 100) / 100;
+    const liveRate = await getLiveUsdToNgnRate();
+    const ngn = Math.round(usd * liveRate * 100) / 100;
     const amountInKobo = Math.round(ngn * 100);
 
     const secretKey = process.env.PAYSTACK_SECRET_KEY || '';
@@ -76,7 +99,7 @@ export async function POST(request: Request) {
             {
               display_name: 'NGN Conversion Rate',
               variable_name: 'conversion_rate',
-              value: '1 USD = 1,346.84 NGN',
+              value: `1 USD = ${liveRate.toLocaleString('en-US', { minimumFractionDigits: 2 })} NGN`,
             },
           ],
         },
@@ -100,7 +123,7 @@ export async function POST(request: Request) {
       ngnAmount: ngn,
       amountInKobo,
       usdAmount: usd,
-      exchangeRate: USD_TO_NGN,
+      exchangeRate: liveRate,
       description: descriptionText,
     });
   } catch (error: any) {
