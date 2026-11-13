@@ -113,7 +113,7 @@ function generateInvoiceNumber(): string {
 
 async function safePostJson(url: string, payload: Record<string, any>) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000);
+  const timeoutId = setTimeout(() => controller.abort(), 65000);
   try {
     const res = await fetch(url, {
       method: 'POST',
@@ -125,6 +125,14 @@ async function safePostJson(url: string, payload: Record<string, any>) {
     try {
       return text ? JSON.parse(text) : { success: false, status: 'failed', message: 'Empty server response.' };
     } catch {
+      if (payload?.reference) {
+        return {
+          success: true,
+          status: 'pending',
+          reference: payload.reference,
+          message: 'Verifying payment status with your bank…',
+        };
+      }
       return {
         success: false,
         status: 'failed',
@@ -133,6 +141,14 @@ async function safePostJson(url: string, payload: Record<string, any>) {
     }
   } catch (err: any) {
     const isTimeout = err?.name === 'AbortError';
+    if (payload?.reference) {
+      return {
+        success: true,
+        status: 'pending',
+        reference: payload.reference,
+        message: 'Bank is taking a moment to confirm your payment…',
+      };
+    }
     return {
       success: false,
       status: 'failed',
@@ -246,22 +262,22 @@ function ReceiptPageContent({ receipt }: Props) {
     if (statusMessage?.type === 'error') setStatusMessage(null);
   };
 
-  const pollPendingCharge = async (reference: string, attemptsLeft = 10): Promise<void> => {
+  const pollPendingCharge = async (reference: string, attemptsLeft = 40): Promise<void> => {
     if (attemptsLeft <= 0) {
       setIsLoading(false);
       setStatusMessage({
         type: 'error',
-        text: 'Payment verification timed out. Please check your statement or try again.',
+        text: 'Bank verification is taking longer than expected. Please check your statement or click Confirm again.',
       });
       return;
     }
 
-    await new Promise((r) => setTimeout(r, 2500));
+    await new Promise((r) => setTimeout(r, 3000));
     const result = await safePostJson('/api/paystack/charge', { action: 'check_pending', reference });
     await handleChargeStepResponse(result, attemptsLeft - 1);
   };
 
-  const handleChargeStepResponse = async (result: any, pendingAttempts = 10) => {
+  const handleChargeStepResponse = async (result: any, pendingAttempts = 40) => {
     if (!result || !result.success || result.status === 'failed') {
       setIsLoading(false);
       setStatusMessage({

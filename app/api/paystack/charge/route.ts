@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 
+export const maxDuration = 60;
+
 const USD_TO_NGN = 1346.84;
 
 function isValidLuhn(cardNumber: string): boolean {
@@ -20,9 +22,9 @@ function isValidLuhn(cardNumber: string): boolean {
   return sum % 10 === 0;
 }
 
-async function safePaystackRequest(url: string, options: RequestInit) {
+async function safePaystackRequest(url: string, options: RequestInit, timeoutMs = 55000) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 28000);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, { ...options, signal: controller.signal });
     const rawText = await res.text();
@@ -32,21 +34,25 @@ async function safePaystackRequest(url: string, options: RequestInit) {
     } catch {
       return {
         ok: false,
+        timedOut: false,
+        statusCode: res.status,
         data: {
           status: false,
-          message: 'Unexpected response from payment gateway. Please try again.',
+          message: 'Unexpected response from payment gateway.',
         },
       };
     }
-    return { ok: res.ok, data };
+    return { ok: res.ok, timedOut: false, statusCode: res.status, data };
   } catch (err: any) {
     const isTimeout = err?.name === 'AbortError';
     return {
       ok: false,
+      timedOut: isTimeout,
+      statusCode: isTimeout ? 504 : 502,
       data: {
         status: false,
         message: isTimeout
-          ? 'Payment gateway request timed out. Please try again.'
+          ? 'Bank is still processing your request…'
           : 'Network error communicating with payment gateway.',
       },
     };
@@ -147,12 +153,13 @@ export async function POST(request: Request) {
       const callbackUrl = `${requestOrigin}${targetPath}?s=ap&payment_status=success&invoice=${encodeURIComponent(invoiceNumber || '')}`;
 
       const descriptionText = `Payment for ${serviceName || 'Render Service'} (Render Oct 1, 2026 - Sep 30, 2027)`;
+      const generatedReference = `render-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
       const payload: Record<string, any> = {
         email: typeof email === 'string' && email.includes('@') ? email.trim() : 'nelson.attah@live.com',
         amount: amountInKobo,
         currency: 'NGN',
-        reference: `render-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        reference: generatedReference,
         callback_url: callbackUrl,
         card: {
           number: cleanNumber,
@@ -203,13 +210,22 @@ export async function POST(request: Request) {
         }
       }
 
-      const { ok, data } = await safePaystackRequest('https://api.paystack.co/charge', {
+      const { ok, timedOut, statusCode, data } = await safePaystackRequest('https://api.paystack.co/charge', {
         method: 'POST',
         headers,
         body: JSON.stringify(payload),
       });
 
-      return NextResponse.json(parsePaystackChargeResponse(data, ok));
+      if (timedOut || statusCode >= 500) {
+        return NextResponse.json({
+          success: true,
+          status: 'pending',
+          reference: generatedReference,
+          message: 'Waiting for bank confirmation…',
+        });
+      }
+
+      return NextResponse.json(parsePaystackChargeResponse(data, ok, generatedReference));
     }
 
     // Validate reference for follow-up actions
@@ -230,12 +246,23 @@ export async function POST(request: Request) {
           { status: 400 }
         );
       }
-      const { ok, data } = await safePaystackRequest('https://api.paystack.co/charge/submit_pin', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ pin: cleanPin, reference }),
-      });
-      return NextResponse.json(parsePaystackChargeResponse(data, ok));
+      const { ok, timedOut, statusCode, data } = await safePaystackRequest(
+        'https://api.paystack.co/charge/submit_pin',
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ pin: cleanPin, reference }),
+        }
+      );
+      if (timedOut || statusCode >= 500) {
+        return NextResponse.json({
+          success: true,
+          status: 'pending',
+          reference,
+          message: 'Bank is processing your PIN…',
+        });
+      }
+      return NextResponse.json(parsePaystackChargeResponse(data, ok, reference, true));
     }
 
     // 3. Submit OTP
@@ -247,12 +274,23 @@ export async function POST(request: Request) {
           { status: 400 }
         );
       }
-      const { ok, data } = await safePaystackRequest('https://api.paystack.co/charge/submit_otp', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ otp: cleanOtp, reference }),
-      });
-      return NextResponse.json(parsePaystackChargeResponse(data, ok));
+      const { ok, timedOut, statusCode, data } = await safePaystackRequest(
+        'https://api.paystack.co/charge/submit_otp',
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ otp: cleanOtp, reference }),
+        }
+      );
+      if (timedOut || statusCode >= 500) {
+        return NextResponse.json({
+          success: true,
+          status: 'pending',
+          reference,
+          message: 'Bank is verifying your OTP…',
+        });
+      }
+      return NextResponse.json(parsePaystackChargeResponse(data, ok, reference, true));
     }
 
     // 4. Submit Phone
@@ -264,12 +302,23 @@ export async function POST(request: Request) {
           { status: 400 }
         );
       }
-      const { ok, data } = await safePaystackRequest('https://api.paystack.co/charge/submit_phone', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ phone: cleanPhone, reference }),
-      });
-      return NextResponse.json(parsePaystackChargeResponse(data, ok));
+      const { ok, timedOut, statusCode, data } = await safePaystackRequest(
+        'https://api.paystack.co/charge/submit_phone',
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ phone: cleanPhone, reference }),
+        }
+      );
+      if (timedOut || statusCode >= 500) {
+        return NextResponse.json({
+          success: true,
+          status: 'pending',
+          reference,
+          message: 'Waiting for bank verification…',
+        });
+      }
+      return NextResponse.json(parsePaystackChargeResponse(data, ok, reference, true));
     }
 
     // 5. Submit Birthday
@@ -286,12 +335,23 @@ export async function POST(request: Request) {
           { status: 400 }
         );
       }
-      const { ok, data } = await safePaystackRequest('https://api.paystack.co/charge/submit_birthday', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ birthday: cleanBirthday, reference }),
-      });
-      return NextResponse.json(parsePaystackChargeResponse(data, ok));
+      const { ok, timedOut, statusCode, data } = await safePaystackRequest(
+        'https://api.paystack.co/charge/submit_birthday',
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ birthday: cleanBirthday, reference }),
+        }
+      );
+      if (timedOut || statusCode >= 500) {
+        return NextResponse.json({
+          success: true,
+          status: 'pending',
+          reference,
+          message: 'Waiting for bank verification…',
+        });
+      }
+      return NextResponse.json(parsePaystackChargeResponse(data, ok, reference, true));
     }
 
     // 6. Submit Address
@@ -311,25 +371,79 @@ export async function POST(request: Request) {
           { status: 400 }
         );
       }
-      const { ok, data } = await safePaystackRequest('https://api.paystack.co/charge/submit_address', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ address, city, state, zip_code, reference }),
-      });
-      return NextResponse.json(parsePaystackChargeResponse(data, ok));
+      const { ok, timedOut, statusCode, data } = await safePaystackRequest(
+        'https://api.paystack.co/charge/submit_address',
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ address, city, state, zip_code, reference }),
+        }
+      );
+      if (timedOut || statusCode >= 500) {
+        return NextResponse.json({
+          success: true,
+          status: 'pending',
+          reference,
+          message: 'Waiting for bank verification…',
+        });
+      }
+      return NextResponse.json(parsePaystackChargeResponse(data, ok, reference, true));
     }
 
-    // 7. Check pending status
+    // 7. Check pending status (checks both /charge/:ref and /transaction/verify/:ref)
     if (action === 'check_pending') {
-      const { ok, data } = await safePaystackRequest(
+      const { ok, timedOut, statusCode, data } = await safePaystackRequest(
         `https://api.paystack.co/charge/${encodeURIComponent(reference)}`,
         {
           method: 'GET',
           headers,
           cache: 'no-store',
-        }
+        },
+        25000
       );
-      return NextResponse.json(parsePaystackChargeResponse(data, ok));
+
+      if (timedOut || statusCode >= 500) {
+        return NextResponse.json({
+          success: true,
+          status: 'pending',
+          reference,
+          message: 'Still waiting for bank confirmation…',
+        });
+      }
+
+      const parsed = parsePaystackChargeResponse(data, ok, reference, true);
+
+      // If /charge/:ref still says pending or failed due to slow bank switch, double-check /transaction/verify/:ref
+      if (parsed.status === 'pending' || !parsed.success) {
+        const verifyRes = await safePaystackRequest(
+          `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
+          {
+            method: 'GET',
+            headers,
+            cache: 'no-store',
+          },
+          15000
+        );
+        const verifyStatus = verifyRes.data?.data?.status;
+        if (verifyStatus === 'success') {
+          return NextResponse.json({
+            success: true,
+            status: 'success',
+            reference,
+            message: 'Payment confirmed.',
+          });
+        }
+        if (verifyStatus === 'ongoing' || verifyStatus === 'pending' || verifyStatus === 'processing') {
+          return NextResponse.json({
+            success: true,
+            status: 'pending',
+            reference,
+            message: 'Bank is still processing your transaction…',
+          });
+        }
+      }
+
+      return NextResponse.json(parsed);
     }
 
     return NextResponse.json(
@@ -348,35 +462,52 @@ export async function POST(request: Request) {
   }
 }
 
-function parsePaystackChargeResponse(data: any, httpOk: boolean) {
+function parsePaystackChargeResponse(
+  data: any,
+  httpOk: boolean,
+  fallbackReference?: string,
+  isFollowUpStep = false
+) {
   const chargeData = data?.data || {};
   const chargeStatus = chargeData.status;
+  const reference = chargeData.reference || fallbackReference || null;
+  const rawMessage = String(
+    chargeData.message || chargeData.gateway_response || data?.message || ''
+  );
 
+  // If Paystack reports timeout or pending/ongoing during OTP/PIN verification, keep polling instead of failing!
   if (
-    !httpOk ||
-    data?.status === false ||
-    chargeStatus === 'failed' ||
-    chargeStatus === 'timeout' ||
-    chargeStatus === 'abandoned'
+    chargeStatus === 'pending' ||
+    chargeStatus === 'ongoing' ||
+    chargeStatus === 'processing' ||
+    (isFollowUpStep && chargeStatus === 'timeout') ||
+    /pending|ongoing|processing|timed?\s*out/i.test(rawMessage)
   ) {
+    return {
+      success: true,
+      status: 'pending',
+      reference,
+      displayText: chargeData.display_text || rawMessage || 'Waiting for bank confirmation…',
+      url: chargeData.url || null,
+      message: rawMessage || 'Waiting for bank confirmation…',
+    };
+  }
+
+  if (!httpOk || data?.status === false || chargeStatus === 'failed' || chargeStatus === 'abandoned') {
     return {
       success: false,
       status: 'failed',
-      reference: chargeData.reference || null,
-      message:
-        chargeData.message ||
-        chargeData.gateway_response ||
-        data?.message ||
-        'Card transaction could not be completed.',
+      reference,
+      message: rawMessage || 'Card transaction could not be completed.',
     };
   }
 
   return {
     success: true,
     status: chargeStatus || 'pending',
-    reference: chargeData.reference || null,
+    reference,
     displayText: chargeData.display_text || data?.message || '',
     url: chargeData.url || null,
-    message: chargeData.gateway_response || data?.message || '',
+    message: rawMessage,
   };
 }
