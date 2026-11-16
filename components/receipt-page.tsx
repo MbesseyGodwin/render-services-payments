@@ -230,6 +230,7 @@ function ReceiptPageContent({ receipt }: Props) {
 
   // Track whether current transactionRef has already been submitted once
   const refConsumedRef = useRef(false);
+  const handledCallbackRef = useRef<string | null>(null);
 
   // Card input states & refs for smooth auto-advance
   const [cardNumber, setCardNumber] = useState('');
@@ -362,13 +363,39 @@ function ReceiptPageContent({ receipt }: Props) {
   };
 
   useEffect(() => {
-    const reference = searchParams?.get('reference') || searchParams?.get('trxref');
-    const paymentStatus = searchParams?.get('payment_status');
-
-    if ((reference || paymentStatus === 'success') && !isPaid) {
-      const refToUse = reference || createTransactionReference(receipt.id);
-      markPaymentComplete(refToUse, false);
+    const callbackRef = (searchParams?.get('reference') || searchParams?.get('trxref') || '').trim();
+    if (!callbackRef || isPaid || handledCallbackRef.current === callbackRef) {
+      return;
     }
+
+    try {
+      const storedPaidRaw = localStorage.getItem(`render_paid_lock_${receipt.id}`);
+      if (storedPaidRaw && JSON.parse(storedPaidRaw)?.paid) {
+        return;
+      }
+    } catch {
+      // Ignore storage read errors
+    }
+
+    handledCallbackRef.current = callbackRef;
+
+    if (typeof window !== 'undefined' && window.history?.replaceState) {
+      const url = new URL(window.location.href);
+      for (const param of ['reference', 'trxref', 'paystack_callback', 'payment_status', 'invoice']) {
+        url.searchParams.delete(param);
+      }
+      window.history.replaceState(null, '', `${url.pathname}${url.search}`);
+    }
+
+    void (async () => {
+      setIsLoading(true);
+      setStatusMessage(null);
+      const result = await safePostJson('/api/paystack/charge', {
+        action: 'check_pending',
+        reference: callbackRef,
+      });
+      await handleChargeStepResponse(result);
+    })();
   }, [searchParams, receipt.id, isPaid]);
 
   const handleCardNumberChange = (e: React.ChangeEvent<HTMLInputElement>) => {

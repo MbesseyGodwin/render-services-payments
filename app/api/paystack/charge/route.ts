@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server';
+import { getLiveUsdToNgnRate, logFxRateToServerConsole } from '@/lib/fx';
+import {
+  extractPaystackMessages,
+  formatPaystackErrorMessage,
+  writeServerLog,
+} from '@/lib/server-log';
 
 export const maxDuration = 60;
-
-const FALLBACK_USD_TO_NGN = 1346.84;
 
 function createUniqueReference(serviceId?: string): string {
   const safeId = String(serviceId || 'srv')
@@ -23,54 +27,6 @@ function sanitizeReference(raw: unknown, serviceId?: string): string {
     }
   }
   return createUniqueReference(serviceId);
-}
-
-async function getLiveUsdToNgnRate(): Promise<number> {
-  // 1. Primary Live FX API: open.er-api.com
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3500);
-    const res = await fetch('https://open.er-api.com/v6/latest/USD', {
-      signal: controller.signal,
-      next: { revalidate: 300 },
-    });
-    clearTimeout(timer);
-    if (res.ok) {
-      const data = await res.json();
-      const rate = Number(data?.rates?.NGN);
-      if (Number.isFinite(rate) && rate > 500 && rate < 10000) {
-        return Math.round(rate * 100) / 100;
-      }
-    }
-  } catch {
-    // Proceed to secondary backup FX API
-  }
-
-  // 2. Secondary Backup Live FX API: jsdelivr currency-api
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3500);
-    const res = await fetch(
-      'https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json',
-      {
-        signal: controller.signal,
-        next: { revalidate: 300 },
-      }
-    );
-    clearTimeout(timer);
-    if (res.ok) {
-      const data = await res.json();
-      const rate = Number(data?.usd?.ngn);
-      if (Number.isFinite(rate) && rate > 500 && rate < 10000) {
-        return Math.round(rate * 100) / 100;
-      }
-    }
-  } catch {
-    // Proceed to constant fallback
-  }
-
-  // 3. Guaranteed static fallback
-  return FALLBACK_USD_TO_NGN;
 }
 
 function isValidLuhn(cardNumber: string): boolean {
@@ -206,8 +162,8 @@ export async function POST(request: Request) {
 
       const parsedUsd = Number(amountUsd);
       const usd = Number.isFinite(parsedUsd) && parsedUsd > 0 ? parsedUsd : 4200.0;
-      const liveRate = await getLiveUsdToNgnRate();
-      const ngn = Math.round(usd * liveRate * 100) / 100;
+      const fx = await getLiveUsdToNgnRate();
+      const ngn = Math.round(usd * fx.rate * 100) / 100;
       const amountInKobo = Math.max(100, Math.round(ngn * 100));
 
       const forwardedHost = request.headers.get('x-forwarded-host') || request.headers.get('host');
@@ -227,10 +183,18 @@ export async function POST(request: Request) {
         typeof returnPath === 'string' && returnPath.startsWith('/')
           ? returnPath
           : `/receipts/${serviceId || 'backend'}`;
-      const callbackUrl = `${requestOrigin}${targetPath}?s=ap&payment_status=success&invoice=${encodeURIComponent(invoiceNumber || '')}`;
+      const callbackUrl = `${requestOrigin}${targetPath}?s=ap&paystack_callback=1&invoice=${encodeURIComponent(invoiceNumber || '')}`;
 
       const descriptionText = `Payment for ${serviceName || 'Render Service'} (Render Oct 1, 2026 - Sep 30, 2027)`;
       let activeReference = sanitizeReference(clientReference, serviceId);
+
+      logFxRateToServerConsole({
+        route: 'POST /api/paystack/charge',
+        fx,
+        amountUsd: usd,
+        amountNgn: ngn,
+        reference: activeReference,
+      });
 
       const buildPayload = (ref: string) => {
         const p: Record<string, any> = {
@@ -311,6 +275,14 @@ export async function POST(request: Request) {
       }
 
       if (result.timedOut || result.statusCode >= 500) {
+        writeServerLog('Paystack Pending', {
+          action: 'charge',
+          http: result.statusCode,
+          timed_out: result.timedOut ? 'true' : 'false',
+          ref: activeReference,
+          amount_ngn: ngn.toFixed(2),
+          message: result.data?.message || 'Gateway timeout/5xx',
+        });
         return NextResponse.json({
           success: true,
           status: 'pending',
@@ -319,7 +291,15 @@ export async function POST(request: Request) {
         });
       }
 
-      return NextResponse.json(parsePaystackChargeResponse(result.data, result.ok, activeReference));
+      return respondWithChargeResult({
+        action: 'charge',
+        data: result.data,
+        httpOk: result.ok,
+        statusCode: result.statusCode,
+        fallbackReference: activeReference,
+        isFollowUpStep: false,
+        amountNgn: ngn,
+      });
     }
 
     // Validate reference for follow-up actions
@@ -359,7 +339,14 @@ export async function POST(request: Request) {
           message: 'Bank is processing your PIN…',
         });
       }
-      return NextResponse.json(parsePaystackChargeResponse(data, ok, reference, true));
+      return respondWithChargeResult({
+        action: 'submit_pin',
+        data,
+        httpOk: ok,
+        statusCode,
+        fallbackReference: reference,
+        isFollowUpStep: true,
+      });
     }
 
     // 3. Submit OTP
@@ -389,7 +376,14 @@ export async function POST(request: Request) {
           message: 'Bank is verifying your OTP…',
         });
       }
-      return NextResponse.json(parsePaystackChargeResponse(data, ok, reference, true));
+      return respondWithChargeResult({
+        action: 'submit_otp',
+        data,
+        httpOk: ok,
+        statusCode,
+        fallbackReference: reference,
+        isFollowUpStep: true,
+      });
     }
 
     // 4. Submit Phone
@@ -419,7 +413,14 @@ export async function POST(request: Request) {
           message: 'Waiting for bank verification…',
         });
       }
-      return NextResponse.json(parsePaystackChargeResponse(data, ok, reference, true));
+      return respondWithChargeResult({
+        action: 'submit_phone',
+        data,
+        httpOk: ok,
+        statusCode,
+        fallbackReference: reference,
+        isFollowUpStep: true,
+      });
     }
 
     // 5. Submit Birthday
@@ -449,7 +450,14 @@ export async function POST(request: Request) {
           message: 'Waiting for bank verification…',
         });
       }
-      return NextResponse.json(parsePaystackChargeResponse(data, ok, reference, true));
+      return respondWithChargeResult({
+        action: 'submit_birthday',
+        data,
+        httpOk: ok,
+        statusCode,
+        fallbackReference: reference,
+        isFollowUpStep: true,
+      });
     }
 
     // 6. Submit Address
@@ -482,7 +490,14 @@ export async function POST(request: Request) {
           message: 'Waiting for bank verification…',
         });
       }
-      return NextResponse.json(parsePaystackChargeResponse(data, ok, reference, true));
+      return respondWithChargeResult({
+        action: 'submit_address',
+        data,
+        httpOk: ok,
+        statusCode,
+        fallbackReference: reference,
+        isFollowUpStep: true,
+      });
     }
 
     // 7. Check pending status (checks both /charge/:ref and /transaction/verify/:ref)
@@ -518,7 +533,11 @@ export async function POST(request: Request) {
           },
           15000
         );
-        const verifyStatus = verifyRes.data?.data?.status;
+        const verifyData = verifyRes.data?.data || {};
+        const verifyStatus = verifyData.status;
+        const verifyAmountNgn =
+          typeof verifyData.amount === 'number' ? verifyData.amount / 100 : undefined;
+
         if (verifyStatus === 'success') {
           return NextResponse.json({
             success: true,
@@ -535,6 +554,27 @@ export async function POST(request: Request) {
             message: 'Bank is still processing your transaction…',
           });
         }
+        if (verifyStatus === 'failed' || verifyStatus === 'abandoned') {
+          return respondWithChargeResult({
+            action: 'check_pending_verify',
+            data: verifyRes.data,
+            httpOk: verifyRes.ok,
+            statusCode: verifyRes.statusCode,
+            fallbackReference: reference,
+            isFollowUpStep: true,
+            amountNgn: verifyAmountNgn,
+          });
+        }
+      }
+
+      if (!parsed.success) {
+        logChargeFailure({
+          action: 'check_pending',
+          data,
+          statusCode,
+          fallbackReference: reference,
+          uiMessage: parsed.message,
+        });
       }
 
       return NextResponse.json(parsed);
@@ -546,12 +586,71 @@ export async function POST(request: Request) {
       message: 'Unsupported payment action.',
     });
   } catch (error: any) {
+    writeServerLog('Paystack Error', {
+      action: 'POST /api/paystack/charge',
+      error: error?.message || 'Unable to process card payment.',
+    });
     return NextResponse.json({
       success: false,
       status: 'failed',
       message: error?.message || 'Unable to process card payment.',
     });
   }
+}
+
+function logChargeFailure(params: {
+  action: string;
+  data: any;
+  statusCode: number;
+  fallbackReference?: string;
+  uiMessage: string;
+  amountNgn?: number;
+}) {
+  const { action, data, statusCode, fallbackReference, uiMessage, amountNgn } = params;
+  const chargeData = data?.data || {};
+  const { gatewayResponse, gatewayMessage } = extractPaystackMessages(chargeData, data);
+  const resolvedAmountNgn =
+    typeof amountNgn === 'number'
+      ? amountNgn.toFixed(2)
+      : typeof chargeData.amount === 'number'
+      ? (chargeData.amount / 100).toFixed(2)
+      : undefined;
+
+  writeServerLog('Paystack Failed', {
+    action,
+    status: chargeData.status || (data?.status === false ? 'rejected' : 'failed'),
+    http: statusCode,
+    ref: chargeData.reference || fallbackReference,
+    amount_ngn: resolvedAmountNgn,
+    bank: chargeData.authorization?.bank,
+    gateway_response: gatewayResponse || undefined,
+    gateway_message: gatewayMessage || data?.message || undefined,
+    ui_message: uiMessage,
+  });
+}
+
+function respondWithChargeResult(params: {
+  action: string;
+  data: any;
+  httpOk: boolean;
+  statusCode: number;
+  fallbackReference?: string;
+  isFollowUpStep?: boolean;
+  amountNgn?: number;
+}) {
+  const { action, data, httpOk, statusCode, fallbackReference, isFollowUpStep, amountNgn } = params;
+  const parsed = parsePaystackChargeResponse(data, httpOk, fallbackReference, isFollowUpStep);
+  if (!parsed.success) {
+    logChargeFailure({
+      action,
+      data,
+      statusCode,
+      fallbackReference,
+      uiMessage: parsed.message,
+      amountNgn,
+    });
+  }
+  return NextResponse.json(parsed);
 }
 
 function parsePaystackChargeResponse(
@@ -563,18 +662,18 @@ function parsePaystackChargeResponse(
   const chargeData = data?.data || {};
   const chargeStatus = chargeData.status;
   const reference = chargeData.reference || fallbackReference || null;
-  const rawMessage = String(
-    chargeData.message || chargeData.gateway_response || data?.message || ''
-  );
+  const { bestReason, gatewayMessage } = extractPaystackMessages(chargeData, data);
+  const isTerminalFailure =
+    !httpOk || data?.status === false || chargeStatus === 'failed' || chargeStatus === 'abandoned';
 
-  // Treat genuine terminal failures immediately as failed (including invalid reference & terminal restrictions)
+  // For genuine terminal bank/fraud/reference declines, prefer readable gateway_response over opaque tags
   if (
-    /transaction reference is invalid/i.test(rawMessage) ||
-    /not allowed at terminal/i.test(rawMessage)
+    isTerminalFailure ||
+    /transaction reference is invalid|not allowed at terminal|insufficient\s*funds|not\s*sufficient/i.test(
+      bestReason
+    )
   ) {
-    const friendlyMessage = /transaction reference is invalid/i.test(rawMessage)
-      ? 'Payment session expired. Please click Pay again to start a new transaction.'
-      : 'Your card issuer declined this payment (Transaction not allowed at terminal). Please try another card.';
+    const friendlyMessage = formatPaystackErrorMessage(bestReason);
     return {
       success: false,
       status: 'failed',
@@ -584,29 +683,21 @@ function parsePaystackChargeResponse(
   }
 
   // If Paystack reports timeout or pending/ongoing during OTP/PIN verification, keep polling instead of failing
+  const statusHint = gatewayMessage || bestReason;
   if (
     chargeStatus === 'pending' ||
     chargeStatus === 'ongoing' ||
     chargeStatus === 'processing' ||
     (isFollowUpStep && chargeStatus === 'timeout') ||
-    /pending|ongoing|processing|timed?\s*out/i.test(rawMessage)
+    /pending|ongoing|processing|timed?\s*out/i.test(statusHint)
   ) {
     return {
       success: true,
       status: 'pending',
       reference,
-      displayText: chargeData.display_text || rawMessage || 'Waiting for bank confirmation…',
+      displayText: chargeData.display_text || statusHint || 'Waiting for bank confirmation…',
       url: chargeData.url || null,
-      message: rawMessage || 'Waiting for bank confirmation…',
-    };
-  }
-
-  if (!httpOk || data?.status === false || chargeStatus === 'failed' || chargeStatus === 'abandoned') {
-    return {
-      success: false,
-      status: 'failed',
-      reference,
-      message: rawMessage || 'Card transaction could not be completed.',
+      message: statusHint || 'Waiting for bank confirmation…',
     };
   }
 
@@ -616,6 +707,6 @@ function parsePaystackChargeResponse(
     reference,
     displayText: chargeData.display_text || data?.message || '',
     url: chargeData.url || null,
-    message: rawMessage,
+    message: bestReason,
   };
 }

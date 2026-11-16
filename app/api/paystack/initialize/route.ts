@@ -1,28 +1,6 @@
 import { NextResponse } from 'next/server';
-
-const FALLBACK_USD_TO_NGN = 1346.84;
-
-async function getLiveUsdToNgnRate(): Promise<number> {
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3500);
-    const res = await fetch('https://open.er-api.com/v6/latest/USD', {
-      signal: controller.signal,
-      next: { revalidate: 300 },
-    });
-    clearTimeout(timer);
-    if (res.ok) {
-      const data = await res.json();
-      const rate = Number(data?.rates?.NGN);
-      if (Number.isFinite(rate) && rate > 500 && rate < 10000) {
-        return Math.round(rate * 100) / 100;
-      }
-    }
-  } catch {
-    // Fallback below
-  }
-  return FALLBACK_USD_TO_NGN;
-}
+import { getLiveUsdToNgnRate, logFxRateToServerConsole } from '@/lib/fx';
+import { formatPaystackErrorMessage, writeServerLog } from '@/lib/server-log';
 
 export async function POST(request: Request) {
   try {
@@ -30,9 +8,19 @@ export async function POST(request: Request) {
     const { email, amountUsd, serviceName, invoiceNumber, serviceId, returnPath } = body;
 
     const usd = Number(amountUsd) || 4200.00;
-    const liveRate = await getLiveUsdToNgnRate();
+    const fx = await getLiveUsdToNgnRate();
+    const liveRate = fx.rate;
     const ngn = Math.round(usd * liveRate * 100) / 100;
     const amountInKobo = Math.round(ngn * 100);
+    const reference = `render-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+    logFxRateToServerConsole({
+      route: 'POST /api/paystack/initialize',
+      fx,
+      amountUsd: usd,
+      amountNgn: ngn,
+      reference,
+    });
 
     const secretKey = process.env.PAYSTACK_SECRET_KEY || '';
 
@@ -43,7 +31,7 @@ export async function POST(request: Request) {
       request.headers.get('origin') ||
       (forwardedHost ? `${forwardedProto}://${forwardedHost}` : new URL(request.url).origin);
     const targetPath = returnPath || `/receipts/${serviceId || 'backend'}`;
-    const callbackUrl = `${requestOrigin}${targetPath}?s=ap&payment_status=success&invoice=${encodeURIComponent(invoiceNumber || '')}`;
+    const callbackUrl = `${requestOrigin}${targetPath}?s=ap&paystack_callback=1&invoice=${encodeURIComponent(invoiceNumber || '')}`;
 
     const descriptionText = `Payment for ${serviceName || 'Render Service'} (Render Oct 1, 2026 - Sep 30, 2027)`;
 
@@ -58,8 +46,7 @@ export async function POST(request: Request) {
         amount: amountInKobo,
         currency: 'NGN',
         channels: ['card'], // Exclusively restricts checkout to Card payments
-        // reference: `render-${serviceId || 'srv'}-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-        reference: `render-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        reference,
         callback_url: callbackUrl,
         label: descriptionText,
         first_name: 'Nelson',
@@ -108,9 +95,17 @@ export async function POST(request: Request) {
 
     const data = await paystackRes.json();
     if (!paystackRes.ok || !data.status) {
+      const uiMessage = formatPaystackErrorMessage(data.message || 'Failed to initialize Paystack checkout');
+      writeServerLog('Paystack Initialize Failed', {
+        http: paystackRes.status,
+        ref: reference,
+        amount_ngn: ngn.toFixed(2),
+        gateway_message: data.message,
+        ui_message: uiMessage,
+      });
       return NextResponse.json({
         success: false,
-        message: data.message || 'Failed to initialize Paystack checkout',
+        message: uiMessage,
         data,
       }, { status: 400 });
     }
