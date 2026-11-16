@@ -20,7 +20,7 @@ export const receipts: Record<string, ReceiptItem> = {
     qty: 1,
     unitPriceStr: '$60.0000',
     monthly: 60,
-    total: 720,
+    total: 240,
     scrambledPath: '/i/acct_1CTbIsBmBV2o9vP5/live_YWNjdF8xQ1RiSXNCbUJWMm85dlA1LF9WWHpkbFBsOU9SOHZpaVBTc2tScXNodTdENUNxaWtrLDE4NTA3Mzg5OQ02007pBkRHH1',
   },
   frontend: {
