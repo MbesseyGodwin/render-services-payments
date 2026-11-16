@@ -1,3 +1,5 @@
+// components/receipt-page.tsx
+
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -20,6 +22,8 @@ export interface ReceiptItem {
   unitPriceStr: string;
   monthly: number;
   total: number;
+  months?: number;
+  billingPeriod?: string;
   scrambledPath: string;
 }
 
@@ -248,7 +252,9 @@ function ReceiptPageContent({ receipt }: Props) {
   const [authState, setAuthState] = useState<string>('');
   const [authZip, setAuthZip] = useState<string>('');
 
-  // Dynamic NGN conversion computation (fetched via same-origin /api/fx with fallback to 1346.84)
+  // Billing term + dynamic NGN conversion computation
+  const billingMonths = receipt.months ?? 12;
+  const billingMemo = receipt.billingPeriod || FIXED_MEMO;
   const ngnEquivalent = Math.round(receipt.total * usdToNgnRate * 100) / 100;
 
   // Create a brand-new unique Transaction Reference on EVERY page load/refresh
@@ -621,6 +627,7 @@ function ReceiptPageContent({ receipt }: Props) {
       email: FIXED_EMAIL,
       amountUsd: receipt.total,
       serviceName: receipt.name,
+      billingPeriod: billingMemo,
       invoiceNumber,
       serviceId: receipt.id,
       returnPath: receipt.scrambledPath,
@@ -768,7 +775,7 @@ function ReceiptPageContent({ receipt }: Props) {
                 <dd>{invoiceNumber}</dd>
 
                 <dt>Memo</dt>
-                <dd>{FIXED_MEMO}</dd>
+                <dd>{billingMemo}</dd>
               </dl>
 
               <hr className="card-divider" />
@@ -799,8 +806,8 @@ function ReceiptPageContent({ receipt }: Props) {
               <h2>Invoice Details</h2>
               <p><strong>Item:</strong> {receipt.name}</p>
               <p><strong>Quantity:</strong> 1</p>
-              <p><strong>Unit Price:</strong> {receipt.unitPriceStr} / month</p>
-              <p><strong>Billing Period:</strong> {FIXED_MEMO}</p>
+              <p><strong>Unit Price:</strong> {receipt.unitPriceStr} / month × {billingMonths} months</p>
+              <p><strong>Billing Period:</strong> {billingMemo}</p>
               <p><strong>Total:</strong> {formatUSD(receipt.total)}</p>
             </div>
 
@@ -967,7 +974,9 @@ function ReceiptPageContent({ receipt }: Props) {
               <div className="drawer-item-title">{receipt.name}</div>
               <div className="drawer-item-price">{formatUSD(receipt.total)}</div>
             </div>
-            <div className="drawer-item-qty">Qty 1</div>
+            <div className="drawer-item-qty">
+              Qty {receipt.qty} · {billingMonths} {billingMonths === 1 ? 'month' : 'months'} ({formatUSD(receipt.monthly)}/mo)
+            </div>
           </div>
 
           {/* Totals Summary */}
@@ -1169,32 +1178,34 @@ function ReceiptPageContent({ receipt }: Props) {
               )}
             </p>
 
-            <div className="success-modal-summary">
-              <div className="success-modal-summary-row">
-                <span>Status</span>
-                <strong style={{ color: '#059669' }}>Paid</strong>
-              </div>
-              <div className="success-modal-summary-row">
-                <span>Amount</span>
-                <strong>{formatUSD(receipt.total)}</strong>
-              </div>
-              <div className="success-modal-summary-row">
-                <span>Invoice</span>
-                <strong>{invoiceNumber}</strong>
-              </div>
-              {paymentDetails?.date && (
-                <div className="success-modal-summary-row">
-                  <span>Date</span>
-                  <strong>{paymentDetails.date}</strong>
-                </div>
-              )}
-              {paymentDetails?.ref && (
-                <div className="success-modal-summary-row">
-                  <span>Reference</span>
-                  <strong style={{ fontSize: '11px', wordBreak: 'break-all' }}>{paymentDetails.ref}</strong>
-                </div>
-              )}
-            </div>
+            <table className="success-modal-table" aria-label="Payment receipt summary">
+              <tbody>
+                <tr>
+                  <th scope="row">Status</th>
+                  <td className="success-modal-status-paid">Paid</td>
+                </tr>
+                <tr>
+                  <th scope="row">Amount</th>
+                  <td>{formatUSD(receipt.total)}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Invoice</th>
+                  <td>{invoiceNumber}</td>
+                </tr>
+                {paymentDetails?.date && (
+                  <tr>
+                    <th scope="row">Date</th>
+                    <td>{paymentDetails.date}</td>
+                  </tr>
+                )}
+                {paymentDetails?.ref && (
+                  <tr>
+                    <th scope="row">Reference</th>
+                    <td className="success-modal-ref-cell">{paymentDetails.ref}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
 
             <button
               type="button"

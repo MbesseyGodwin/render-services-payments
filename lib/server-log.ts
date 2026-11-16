@@ -1,3 +1,5 @@
+// lib/server-log.ts
+
 const OPAQUE_PAYSTACK_TAGS = new Set([
   'fellback-bnf',
   'expecting-3d-response',

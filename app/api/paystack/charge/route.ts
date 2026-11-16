@@ -1,3 +1,5 @@
+// app/api/paystack/charge/route.ts
+
 import { NextResponse } from 'next/server';
 import { getLiveUsdToNgnRate, logFxRateToServerConsole } from '@/lib/fx';
 import {
@@ -121,6 +123,7 @@ export async function POST(request: Request) {
         email,
         amountUsd,
         serviceName,
+        billingPeriod,
         invoiceNumber,
         serviceId,
         returnPath,
@@ -185,7 +188,11 @@ export async function POST(request: Request) {
           : `/receipts/${serviceId || 'backend'}`;
       const callbackUrl = `${requestOrigin}${targetPath}?s=ap&paystack_callback=1&invoice=${encodeURIComponent(invoiceNumber || '')}`;
 
-      const descriptionText = `Payment for ${serviceName || 'Render Service'} (Render Oct 1, 2026 - Sep 30, 2027)`;
+      const resolvedBillingPeriod =
+        typeof billingPeriod === 'string' && billingPeriod.trim()
+          ? billingPeriod.trim().slice(0, 120)
+          : 'Render Oct 1, 2026 - Sep 30, 2027';
+      const descriptionText = `Payment for ${serviceName || 'Render Service'} (${resolvedBillingPeriod})`;
       let activeReference = sanitizeReference(clientReference, serviceId);
 
       logFxRateToServerConsole({
@@ -212,7 +219,7 @@ export async function POST(request: Request) {
           metadata: {
             description: descriptionText,
             narration: descriptionText,
-            billing_period: 'Render Oct 1, 2026 - Sep 30, 2027',
+            billing_period: resolvedBillingPeriod,
             invoice_number: invoiceNumber || '',
             service_id: serviceId || '',
             custom_fields: [
@@ -234,7 +241,7 @@ export async function POST(request: Request) {
               {
                 display_name: 'Billing Period',
                 variable_name: 'billing_period',
-                value: 'Render Oct 1, 2026 - Sep 30, 2027',
+                value: resolvedBillingPeriod,
               },
               {
                 display_name: 'USD Total',

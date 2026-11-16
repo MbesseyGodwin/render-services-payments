@@ -1,3 +1,5 @@
+// lib/fx.ts
+
 import { writeServerLog } from '@/lib/server-log';
 
 export const FALLBACK_USD_TO_NGN = 1346.84;

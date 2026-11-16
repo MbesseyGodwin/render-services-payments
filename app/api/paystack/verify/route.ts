@@ -1,3 +1,5 @@
+// app/api/paystack/verify/route.ts
+
 import { NextResponse } from 'next/server';
 import {
   extractPaystackMessages,

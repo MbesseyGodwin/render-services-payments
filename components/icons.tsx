@@ -1,3 +1,5 @@
+// components/icons.tsx
+
 import React from 'react';
 
 export function VisaIcon({ style }: { style?: React.CSSProperties }) {

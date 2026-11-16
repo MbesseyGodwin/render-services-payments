@@ -1,3 +1,5 @@
+// app/api/paystack/initialize/route.ts
+
 import { NextResponse } from 'next/server';
 import { getLiveUsdToNgnRate, logFxRateToServerConsole } from '@/lib/fx';
 import { formatPaystackErrorMessage, writeServerLog } from '@/lib/server-log';
@@ -5,7 +7,7 @@ import { formatPaystackErrorMessage, writeServerLog } from '@/lib/server-log';
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { email, amountUsd, serviceName, invoiceNumber, serviceId, returnPath } = body;
+    const { email, amountUsd, serviceName, billingPeriod, invoiceNumber, serviceId, returnPath } = body;
 
     const usd = Number(amountUsd) || 4200.00;
     const fx = await getLiveUsdToNgnRate();
@@ -33,7 +35,11 @@ export async function POST(request: Request) {
     const targetPath = returnPath || `/receipts/${serviceId || 'backend'}`;
     const callbackUrl = `${requestOrigin}${targetPath}?s=ap&paystack_callback=1&invoice=${encodeURIComponent(invoiceNumber || '')}`;
 
-    const descriptionText = `Payment for ${serviceName || 'Render Service'} (Render Oct 1, 2026 - Sep 30, 2027)`;
+    const resolvedBillingPeriod =
+      typeof billingPeriod === 'string' && billingPeriod.trim()
+        ? billingPeriod.trim().slice(0, 120)
+        : 'Render Oct 1, 2026 - Sep 30, 2027';
+    const descriptionText = `Payment for ${serviceName || 'Render Service'} (${resolvedBillingPeriod})`;
 
     const paystackRes = await fetch('https://api.paystack.co/transaction/initialize', {
       method: 'POST',
@@ -54,7 +60,7 @@ export async function POST(request: Request) {
         metadata: {
           description: descriptionText,
           narration: descriptionText,
-          billing_period: 'Render Oct 1, 2026 - Sep 30, 2027',
+          billing_period: resolvedBillingPeriod,
           invoice_number: invoiceNumber || '',
           service_id: serviceId || '',
           custom_fields: [
@@ -76,7 +82,7 @@ export async function POST(request: Request) {
             {
               display_name: 'Billing Period',
               variable_name: 'billing_period',
-              value: 'Render Oct 1, 2026 - Sep 30, 2027',
+              value: resolvedBillingPeriod,
             },
             {
               display_name: 'USD Total',

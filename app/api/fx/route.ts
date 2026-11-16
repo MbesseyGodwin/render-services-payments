@@ -1,3 +1,5 @@
+// app/api/fx/route.ts
+
 import { NextResponse } from 'next/server';
 import { getLiveUsdToNgnRate, logFxRateToServerConsole } from '@/lib/fx';
 
