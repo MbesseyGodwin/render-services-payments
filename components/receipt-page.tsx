@@ -852,9 +852,9 @@ function ReceiptPageContent({ receipt }: Props) {
               <p><strong>Total:</strong> {formatUSD(receipt.total)}</p>
             </div>
 
-            {/* CARD 2: Payment Section (Paystack Inline Checkout) */}
+            {/* CARD 2: Payment Section (Paystack Inline Card Checkout) */}
             <section className="stripe-card payment-card-wrapper" aria-label="Payment checkout">
-              <h2 className="payment-card-title">Pay invoice</h2>
+              <h2 className="payment-card-title">Pay with card</h2>
 
               <div
                 style={{
@@ -871,11 +871,11 @@ function ReceiptPageContent({ receipt }: Props) {
               >
                 <div>
                   <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
-                    Card or Bank Transfer
+                    Debit or Credit Card
                   </div>
-                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                  {/* <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
                     Secured checkout · {formatNGN(ngnEquivalent)}
-                  </div>
+                  </div> */}
                 </div>
                 <div className="card-brands-cluster" style={{ marginLeft: 0 }}>
                   <VisaIcon />
@@ -1035,8 +1035,8 @@ function ReceiptPageContent({ receipt }: Props) {
               {authStep === 'send_pin'
                 ? 'Card PIN Verification'
                 : authStep === 'send_otp'
-                ? 'One-Time Password'
-                : 'Card Verification'}
+                  ? 'One-Time Password'
+                  : 'Card Verification'}
             </h2>
             <p className="success-modal-desc">{authPromptText}</p>
 
@@ -1060,12 +1060,12 @@ function ReceiptPageContent({ receipt }: Props) {
                     authStep === 'send_pin'
                       ? '••••'
                       : authStep === 'send_otp'
-                      ? '123456'
-                      : authStep === 'send_birthday'
-                      ? 'YYYY-MM-DD'
-                      : authStep === 'send_phone'
-                      ? 'Phone number'
-                      : 'Street address'
+                        ? '123456'
+                        : authStep === 'send_birthday'
+                          ? 'YYYY-MM-DD'
+                          : authStep === 'send_phone'
+                            ? 'Phone number'
+                            : 'Street address'
                   }
                   value={authInputValue}
                   onChange={(e) => {

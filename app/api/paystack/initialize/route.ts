@@ -76,7 +76,7 @@ export async function POST(request: Request) {
         email: resolvedEmail,
         amount: amountInKobo,
         currency: 'NGN',
-        channels: ['card', 'bank_transfer'],
+        channels: ['card'],
         reference,
         callback_url: callbackUrl,
         label: descriptionText,
