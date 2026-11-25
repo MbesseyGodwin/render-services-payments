@@ -9,12 +9,24 @@ export async function POST(request: Request) {
     const body = await request.json();
     const { email, amountUsd, serviceName, billingPeriod, invoiceNumber, serviceId, returnPath } = body;
 
-    const usd = Number(amountUsd) || 4200.00;
+    const parsedUsd = Number(amountUsd);
+    if (!Number.isFinite(parsedUsd) || parsedUsd <= 0) {
+      return NextResponse.json({
+        success: false,
+        message: 'Invalid payment amount.',
+      }, { status: 400 });
+    }
+    const usd = parsedUsd;
     const fx = await getLiveUsdToNgnRate();
     const liveRate = fx.rate;
     const ngn = Math.round(usd * liveRate * 100) / 100;
-    const amountInKobo = Math.round(ngn * 100);
-    const reference = `render-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const amountInKobo = Math.max(100, Math.round(ngn * 100));
+    const safeServiceId = String(serviceId || 'srv').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 16) || 'srv';
+    const randomPart =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID().replace(/-/g, '').slice(0, 10)
+        : Math.random().toString(36).slice(2, 12);
+    const reference = `render-${safeServiceId}-${Date.now()}-${randomPart}`;
 
     logFxRateToServerConsole({
       route: 'POST /api/paystack/initialize',
@@ -24,7 +36,13 @@ export async function POST(request: Request) {
       reference,
     });
 
-    const secretKey = process.env.PAYSTACK_SECRET_KEY || '';
+    const secretKey = (process.env.PAYSTACK_SECRET_KEY || '').trim();
+    if (!secretKey) {
+      return NextResponse.json({
+        success: false,
+        message: 'Payment service is temporarily unavailable.',
+      }, { status: 503 });
+    }
 
     // Resolve live deployment origin without any localhost fallback
     const forwardedHost = request.headers.get('x-forwarded-host') || request.headers.get('host');
@@ -32,9 +50,16 @@ export async function POST(request: Request) {
     const requestOrigin =
       request.headers.get('origin') ||
       (forwardedHost ? `${forwardedProto}://${forwardedHost}` : new URL(request.url).origin);
-    const targetPath = returnPath || `/receipts/${serviceId || 'backend'}`;
+    const targetPath =
+      typeof returnPath === 'string' && returnPath.startsWith('/')
+        ? returnPath
+        : `/receipts/${serviceId || 'backend'}`;
     const callbackUrl = `${requestOrigin}${targetPath}?s=ap&paystack_callback=1&invoice=${encodeURIComponent(invoiceNumber || '')}`;
 
+    const resolvedEmail =
+      typeof email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+        ? email.trim().toLowerCase()
+        : 'nelson.attah@live.com';
     const resolvedBillingPeriod =
       typeof billingPeriod === 'string' && billingPeriod.trim()
         ? billingPeriod.trim().slice(0, 120)
@@ -48,15 +73,13 @@ export async function POST(request: Request) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        email: email || 'nelson.attah@live.com',
+        email: resolvedEmail,
         amount: amountInKobo,
         currency: 'NGN',
-        channels: ['card'], // Exclusively restricts checkout to Card payments
+        channels: ['card', 'bank_transfer'],
         reference,
         callback_url: callbackUrl,
         label: descriptionText,
-        first_name: 'Nelson',
-        last_name: 'Attah',
         metadata: {
           description: descriptionText,
           narration: descriptionText,

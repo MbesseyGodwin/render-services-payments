@@ -403,11 +403,28 @@ function ReceiptPageContent({ receipt }: Props) {
     void (async () => {
       setIsLoading(true);
       setStatusMessage(null);
-      const result = await safePostJson('/api/paystack/charge', {
-        action: 'check_pending',
-        reference: callbackRef,
-      });
-      await handleChargeStepResponse(result);
+      try {
+        const res = await fetch(`/api/paystack/verify?reference=${encodeURIComponent(callbackRef)}`, {
+          cache: 'no-store',
+        });
+        const data = await res.json();
+        const txStatus = data?.data?.status;
+        if (res.ok && txStatus === 'success') {
+          markPaymentComplete(callbackRef, false);
+        } else {
+          setIsLoading(false);
+          setStatusMessage({
+            type: 'error',
+            text: data?.friendlyMessage || data?.message || 'Payment was not completed. Please try again.',
+          });
+        }
+      } catch {
+        setIsLoading(false);
+        setStatusMessage({
+          type: 'error',
+          text: 'Could not verify payment status. Please try again.',
+        });
+      }
     })();
   }, [searchParams, receipt.id, isPaid]);
 
@@ -577,7 +594,7 @@ function ReceiptPageContent({ receipt }: Props) {
   const handlePay = async () => {
     if (isLoading || isPaid) return;
 
-    // Double-check localStorage lock before initiating charge
+    // Double-check localStorage lock before initiating payment
     try {
       const paidLockKey = `render_paid_lock_${receipt.id}`;
       const existing = localStorage.getItem(paidLockKey);
@@ -592,45 +609,10 @@ function ReceiptPageContent({ receipt }: Props) {
       // Continue
     }
 
-    const cleanNumber = cardNumber.replace(/\D/g, '');
-    const expiryDigits = cardExpiry.replace(/\D/g, '');
-    const expMonth = expiryDigits.slice(0, 2);
-    const expYear = expiryDigits.slice(2, 4);
-    const cleanCvc = cardCvc.replace(/\D/g, '');
-
-    if (cleanNumber.length < 13 || cleanNumber.length > 19) {
-      setStatusMessage({ type: 'error', text: 'Your card number is incomplete.' });
-      return;
-    }
-    if (!isValidLuhn(cleanNumber)) {
-      setStatusMessage({ type: 'error', text: 'Your card number is invalid.' });
-      return;
-    }
-
-    const expiryError = validateExpiry(expMonth, expYear);
-    if (expiryError) {
-      setStatusMessage({ type: 'error', text: expiryError });
-      return;
-    }
-
-    if (cleanCvc.length < 3 || cleanCvc.length > 4) {
-      setStatusMessage({ type: 'error', text: 'Your card’s security code is incomplete.' });
-      return;
-    }
-
-    // Ensure every charge attempt uses a guaranteed fresh, unused transaction reference
-    let chargeReference = transactionRef;
-    if (!chargeReference || refConsumedRef.current) {
-      chargeReference = createTransactionReference(receipt.id);
-      setTransactionRef(chargeReference);
-    }
-    refConsumedRef.current = true;
-
     setIsLoading(true);
     setStatusMessage(null);
 
-    const result = await safePostJson('/api/paystack/charge', {
-      action: 'charge',
+    const result = await safePostJson('/api/paystack/initialize', {
       email: recipientEmail,
       amountUsd: receipt.total,
       serviceName: receipt.name,
@@ -638,16 +620,68 @@ function ReceiptPageContent({ receipt }: Props) {
       invoiceNumber,
       serviceId: receipt.id,
       returnPath: receipt.scrambledPath,
-      reference: chargeReference,
-      card: {
-        number: cleanNumber,
-        cvv: cleanCvc,
-        expiry_month: expMonth,
-        expiry_year: expYear,
-      },
     });
 
-    await handleChargeStepResponse(result);
+    if (!result || !result.success || typeof result.access_code !== 'string') {
+      setIsLoading(false);
+      setStatusMessage({
+        type: 'error',
+        text: result?.message || 'Unable to start Paystack checkout. Please try again.',
+      });
+      return;
+    }
+
+    const expectedRef = typeof result.reference === 'string' ? result.reference : '';
+
+    try {
+      const { default: Paystack } = await import('@paystack/inline-js');
+      new Paystack().resumeTransaction(result.access_code, {
+        onSuccess: async (tx) => {
+          const refToVerify = tx?.reference || expectedRef;
+          if (!refToVerify) {
+            markPaymentComplete(expectedRef || createTransactionReference(receipt.id), false);
+            return;
+          }
+          try {
+            const verifyRes = await fetch(`/api/paystack/verify?reference=${encodeURIComponent(refToVerify)}`, {
+              cache: 'no-store',
+            });
+            const verifyData = await verifyRes.json();
+            if (verifyRes.ok && verifyData?.data?.status === 'success') {
+              markPaymentComplete(refToVerify, false);
+            } else {
+              setIsLoading(false);
+              setStatusMessage({
+                type: 'error',
+                text: verifyData?.friendlyMessage || 'Payment could not be verified. Please contact support with your reference.',
+              });
+            }
+          } catch {
+            markPaymentComplete(refToVerify, false);
+          }
+        },
+        onCancel: () => {
+          setIsLoading(false);
+        },
+        onError: (err) => {
+          setIsLoading(false);
+          setStatusMessage({
+            type: 'error',
+            text: err?.message || 'Paystack checkout encountered an error. Please try again.',
+          });
+        },
+      });
+    } catch {
+      if (typeof result.authorization_url === 'string' && typeof window !== 'undefined') {
+        window.location.href = result.authorization_url;
+      } else {
+        setIsLoading(false);
+        setStatusMessage({
+          type: 'error',
+          text: 'Could not open Paystack checkout window. Please try again.',
+        });
+      }
+    }
   };
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
@@ -818,72 +852,36 @@ function ReceiptPageContent({ receipt }: Props) {
               <p><strong>Total:</strong> {formatUSD(receipt.total)}</p>
             </div>
 
-            {/* CARD 2: Payment Section */}
-            <section className="stripe-card payment-card-wrapper" aria-label="Payment card">
-              <h2 className="payment-card-title">Pay with card</h2>
+            {/* CARD 2: Payment Section (Paystack Inline Checkout) */}
+            <section className="stripe-card payment-card-wrapper" aria-label="Payment checkout">
+              <h2 className="payment-card-title">Pay invoice</h2>
 
-              <label className="input-label" htmlFor="card-number-input">
-                Card information
-              </label>
-
-              {/* Card Inputs Wrapper */}
-              <div className="card-inputs-wrapper">
-                {/* Top Row: Card Number + Card Icons */}
-                <div className="card-input-row-top">
-                  <input
-                    id="card-number-input"
-                    type="text"
-                    inputMode="numeric"
-                    className="card-input-field"
-                    placeholder="1234 1234 1234 1234"
-                    value={cardNumber}
-                    onChange={handleCardNumberChange}
-                    onKeyDown={handleCardKeyDown}
-                    maxLength={23}
-                    autoComplete="cc-number"
-                    disabled={isLoading || isPaid}
-                  />
-                  <div className="card-brands-cluster">
-                    <VisaIcon />
-                    <MastercardIcon />
-                    <AmexIcon />
-                    <DiscoverIcon />
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '12px',
+                  padding: '12px 14px',
+                  border: '1px solid var(--border-input)',
+                  borderRadius: '6px',
+                  background: '#fafbfc',
+                  marginBottom: '12px',
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                    Card or Bank Transfer
+                  </div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                    Secured checkout · {formatNGN(ngnEquivalent)}
                   </div>
                 </div>
-
-                {/* Bottom Row: Expiry (MM / YY) and CVC */}
-                <div className="card-input-row-bottom">
-                  <div className="card-input-half">
-                    <input
-                      ref={expiryInputRef}
-                      type="text"
-                      inputMode="numeric"
-                      className="card-input-field"
-                      placeholder="MM / YY"
-                      value={cardExpiry}
-                      onChange={handleExpiryChange}
-                      onKeyDown={handleCardKeyDown}
-                      maxLength={7}
-                      autoComplete="cc-exp"
-                      disabled={isLoading || isPaid}
-                    />
-                  </div>
-                  <div className="card-input-half">
-                    <input
-                      ref={cvcInputRef}
-                      type="text"
-                      inputMode="numeric"
-                      className="card-input-field"
-                      placeholder="CVC"
-                      value={cardCvc}
-                      onChange={handleCvcChange}
-                      onKeyDown={handleCardKeyDown}
-                      maxLength={4}
-                      autoComplete="cc-csc"
-                      disabled={isLoading || isPaid}
-                    />
-                    <CvcIcon />
-                  </div>
+                <div className="card-brands-cluster" style={{ marginLeft: 0 }}>
+                  <VisaIcon />
+                  <MastercardIcon />
+                  <AmexIcon />
+                  <DiscoverIcon />
                 </div>
               </div>
 
@@ -900,11 +898,11 @@ function ReceiptPageContent({ receipt }: Props) {
                 disabled={isLoading || isPaid}
               >
                 {isLoading ? (
-                  'Processing…'
+                  'Opening checkout…'
                 ) : isPaid ? (
                   '✓ Paid'
                 ) : (
-                  'Pay'
+                  `Pay ${formatUSD(receipt.total)}`
                 )}
               </button>
 
