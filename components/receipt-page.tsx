@@ -23,7 +23,9 @@ export interface ReceiptItem {
   monthly: number;
   total: number;
   months?: number;
+  billingUnit?: 'month' | 'day';
   billingPeriod?: string;
+  customerEmail?: string;
   scrambledPath: string;
 }
 
@@ -254,7 +256,12 @@ function ReceiptPageContent({ receipt }: Props) {
 
   // Billing term + dynamic NGN conversion computation
   const billingMonths = receipt.months ?? 12;
+  const billingUnit = receipt.billingUnit === 'day' ? 'day' : 'month';
+  const billingUnitSingular = billingUnit === 'day' ? 'day' : 'month';
+  const billingUnitPlural = billingUnit === 'day' ? 'days' : 'months';
+  const billingUnitShort = billingUnit === 'day' ? 'day' : 'mo';
   const billingMemo = receipt.billingPeriod || FIXED_MEMO;
+  const recipientEmail = receipt.customerEmail || FIXED_EMAIL;
   const ngnEquivalent = Math.round(receipt.total * usdToNgnRate * 100) / 100;
 
   // Create a brand-new unique Transaction Reference on EVERY page load/refresh
@@ -624,7 +631,7 @@ function ReceiptPageContent({ receipt }: Props) {
 
     const result = await safePostJson('/api/paystack/charge', {
       action: 'charge',
-      email: FIXED_EMAIL,
+      email: recipientEmail,
       amountUsd: receipt.total,
       serviceName: receipt.name,
       billingPeriod: billingMemo,
@@ -763,7 +770,7 @@ function ReceiptPageContent({ receipt }: Props) {
               {/* Metadata */}
               <dl className="invoice-metadata">
                 <dt>To</dt>
-                <dd>{FIXED_EMAIL}</dd>
+                <dd>{recipientEmail}</dd>
 
                 <dt>From</dt>
                 <dd>
@@ -806,7 +813,7 @@ function ReceiptPageContent({ receipt }: Props) {
               <h2>Invoice Details</h2>
               <p><strong>Item:</strong> {receipt.name}</p>
               <p><strong>Quantity:</strong> 1</p>
-              <p><strong>Unit Price:</strong> {receipt.unitPriceStr} / month × {billingMonths} months</p>
+              <p><strong>Unit Price:</strong> {billingMonths > 0 ? `${receipt.unitPriceStr} / ${billingUnitSingular} × ${billingMonths} ${billingMonths === 1 ? billingUnitSingular : billingUnitPlural}` : `${receipt.unitPriceStr} (One-time)`}</p>
               <p><strong>Billing Period:</strong> {billingMemo}</p>
               <p><strong>Total:</strong> {formatUSD(receipt.total)}</p>
             </div>
@@ -975,7 +982,9 @@ function ReceiptPageContent({ receipt }: Props) {
               <div className="drawer-item-price">{formatUSD(receipt.total)}</div>
             </div>
             <div className="drawer-item-qty">
-              Qty {receipt.qty} · {billingMonths} {billingMonths === 1 ? 'month' : 'months'} ({formatUSD(receipt.monthly)}/mo)
+              {billingMonths > 0
+                ? `Qty ${receipt.qty} · ${billingMonths} ${billingMonths === 1 ? billingUnitSingular : billingUnitPlural} (${formatUSD(receipt.monthly)}/${billingUnitShort})`
+                : `Qty ${receipt.qty} · One-time setup fee (${formatUSD(receipt.total)})`}
             </div>
           </div>
 
@@ -1168,12 +1177,11 @@ function ReceiptPageContent({ receipt }: Props) {
               {isAlreadyPaidVisit ? (
                 <>
                   This invoice has already been paid. Receipt was sent to{' '}
-                  <strong>Nelson Attah</strong> at <strong>nelson.attah@live.com</strong>
+                  <strong>{recipientEmail}</strong>
                 </>
               ) : (
                 <>
-                  Receipt sent to <strong>Nelson Attah</strong> at{' '}
-                  <strong>nelson.attah@live.com</strong>
+                  Receipt sent to <strong>{recipientEmail}</strong>
                 </>
               )}
             </p>

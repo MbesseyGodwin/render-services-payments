@@ -164,7 +164,14 @@ export async function POST(request: Request) {
       }
 
       const parsedUsd = Number(amountUsd);
-      const usd = Number.isFinite(parsedUsd) && parsedUsd > 0 ? parsedUsd : 4200.0;
+      if (!Number.isFinite(parsedUsd) || parsedUsd <= 0) {
+        return NextResponse.json({
+          success: false,
+          status: 'failed',
+          message: 'Invalid payment amount.',
+        });
+      }
+      const usd = parsedUsd;
       const fx = await getLiveUsdToNgnRate();
       const ngn = Math.round(usd * fx.rate * 100) / 100;
       const amountInKobo = Math.max(100, Math.round(ngn * 100));
