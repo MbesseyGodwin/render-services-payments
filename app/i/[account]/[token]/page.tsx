@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import ReceiptPage, { type ReceiptItem } from '@/components/receipt-page';
-import { parseScrambledInvoiceToken } from '@/lib/subscriptions';
+import { formatBillingPeriod, parseScrambledInvoiceToken } from '@/lib/subscriptions';
 
 interface PageProps {
   params: Promise<{ account: string; token: string }>;
@@ -29,8 +29,8 @@ export default async function ScrambledInvoicePage({ params }: PageProps) {
 
   const unitSuffix = decoded.billingUnit === 'day' ? 'd' : decoded.billingUnit === 'year' ? 'y' : 'm';
   const serviceName =
-    decoded.service.id === 'wildcard-ucc-ssl'
-      ? `Wildcard UCC SSL Certificates ${decoded.months} ${decoded.months === 1 ? 'year' : 'years'}`
+    decoded.service.id.startsWith('wildcard-ucc-ssl')
+      ? formatBillingPeriod(decoded.service, decoded.months)
       : decoded.service.checkoutName;
   const receipt: ReceiptItem = {
     id: `${decoded.service.id}-${decoded.months}${unitSuffix}`,

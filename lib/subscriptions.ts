@@ -20,6 +20,25 @@ export interface ManagedServicePackage {
   highlights: string[]
 }
 
+const legacyWildcardCertificate: ManagedServicePackage = {
+  id: 'wildcard-ucc-ssl',
+  name: 'Wildcard UCC SSL Certificates (1 year)',
+  checkoutName: 'Wildcard UCC SSL Certificates 1 year',
+  description: 'Wildcard UCC SSL Certificates 1 year',
+  amountUsd: 620,
+  billingUnit: 'year',
+  yearlyUsd: 620,
+  monthlyUsd: null,
+  termMonths: 1,
+  termLabel: '1 year',
+  checkoutBillingPeriod: 'Wildcard UCC SSL Certificates 1 year',
+  checkoutEmail: 'tegaekoh@ccfng.org',
+  category: 'Operations',
+  highlights: [
+    'Wildcard UCC SSL Certificates ($620)',
+  ],
+}
+
 export const managedServicePackages: readonly ManagedServicePackage[] = [
   {
     id: 'backend',
@@ -471,24 +490,20 @@ export const managedServicePackages: readonly ManagedServicePackage[] = [
     category: 'Operations',
     highlights: ['Cross-region encrypted replication', 'Documented failover readiness'],
   },
-  {
-    id: 'wildcard-ucc-ssl',
-    name: 'Wildcard UCC SSL Certificates (1 year)',
-    checkoutName: 'Wildcard UCC SSL Certificates 1 year',
-    description: 'Wildcard UCC SSL Certificates 1 year',
-    amountUsd: 620,
-    billingUnit: 'year',
-    yearlyUsd: 620,
-    monthlyUsd: null,
-    termMonths: 1,
-    termLabel: '1 year',
-    checkoutBillingPeriod: 'Wildcard UCC SSL Certificates 1 year',
-    checkoutEmail: 'tegaekoh@ccfng.org',
-    category: 'Operations',
-    highlights: [
-      'Wildcard UCC SSL Certificates ($620)',
-    ],
-  },
+  ...['G1', 'G2', 'G3'].map((group): ManagedServicePackage => {
+    const name = `Wildcard UCC SSL Certificates ${group}`
+    return {
+      ...legacyWildcardCertificate,
+      id: `wildcard-ucc-ssl-${group.toLowerCase()}`,
+      name: `${name} (1 year)`,
+      checkoutName: `${name} 1 year`,
+      description: `${name} 1 year`,
+      amountUsd: 207,
+      yearlyUsd: 207,
+      checkoutBillingPeriod: `${name} 1 year`,
+      highlights: [`${name} ($207)`],
+    }
+  }),
 ]
 
 export const SCRAMBLED_INVOICE_ACCOUNT = 'acct_1CTbIsBmBV2o9vP5'
@@ -501,6 +516,7 @@ export const MAX_BILLING_YEARS = 10
 
 export function getManagedServicePackage(id: unknown): ManagedServicePackage | undefined {
   if (typeof id !== 'string') return undefined
+  if (id === legacyWildcardCertificate.id) return legacyWildcardCertificate
   return managedServicePackages.find((service) => service.id === id)
 }
 
@@ -604,8 +620,8 @@ export function formatBillingPeriod(service: ManagedServicePackage, units?: numb
   }
   if (unit === 'year') {
     const label = safeUnits === 1 ? 'year' : 'years'
-    if (service.id === 'wildcard-ucc-ssl') {
-      return `Wildcard UCC SSL Certificates ${safeUnits} ${label}`
+    if (service.id.startsWith('wildcard-ucc-ssl')) {
+      return `${service.checkoutName.replace(/ 1 year$/, '')} ${safeUnits} ${label}`
     }
     const endDate = new Date(Date.UTC(2026 + safeUnits, 9, 0))
     return `Render ${formatter.format(startDate)} - ${formatter.format(endDate)} (${safeUnits} ${label})`
