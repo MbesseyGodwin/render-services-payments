@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   MIN_BILLING_DAYS,
   MIN_BILLING_MONTHS,
+  MIN_BILLING_YEARS,
   buildScrambledInvoicePath,
   calculatePackageAmountUsd,
   clampBillingMonths,
@@ -231,7 +232,8 @@ export default function SubscriptionCatalog() {
   const selectedMonths = selectedPackage ? getSelectedMonths(selectedPackage) : 0
   const selectedUnit = selectedPackage ? getBillingUnit(selectedPackage) : 'month'
   const selectedUnitUsd = selectedPackage ? getUnitUsd(selectedPackage) : null
-  const selectedMinUnits = selectedUnit === 'day' ? MIN_BILLING_DAYS : MIN_BILLING_MONTHS
+  const selectedMinUnits =
+    selectedUnit === 'day' ? MIN_BILLING_DAYS : selectedUnit === 'year' ? MIN_BILLING_YEARS : MIN_BILLING_MONTHS
   const selectedMaxUnits = selectedPackage ? getMaxBillingUnits(selectedPackage) : 60
   const selectedAmountUsd = selectedPackage ? calculatePackageAmountUsd(selectedPackage, selectedMonths) : 0
   const selectedIsBillable = Boolean(
@@ -302,15 +304,18 @@ export default function SubscriptionCatalog() {
                 const unitUsd = getUnitUsd(service)
                 const adjustable = isMonthlyAdjustable(service)
                 const units = getSelectedMonths(service)
-                const minUnits = unit === 'day' ? MIN_BILLING_DAYS : MIN_BILLING_MONTHS
+                const minUnits = unit === 'day' ? MIN_BILLING_DAYS : unit === 'year' ? MIN_BILLING_YEARS : MIN_BILLING_MONTHS
                 const maxUnits = getMaxBillingUnits(service)
                 const amountUsd = calculatePackageAmountUsd(service, units)
                 const canShare = !service.inquiryOnly && service.billable !== false && amountUsd > 0
                 const openDetails = () => setSelectedPackage(service)
                 const shortUnitLabel = unit === 'day'
                   ? (units === 1 ? 'day' : 'days')
-                  : (units === 1 ? 'mo' : 'mos')
-                const rateSuffix = unit === 'day' ? 'day' : 'mo'
+                  : unit === 'year'
+                    ? (units === 1 ? 'yr' : 'yrs')
+                    : (units === 1 ? 'mo' : 'mos')
+                const rateSuffix = unit === 'day' ? 'day' : unit === 'year' ? 'yr' : 'mo'
+                const unitPluralAria = unit === 'day' ? 'days' : unit === 'year' ? 'years' : 'months'
                 return (
                   <tr
                     key={service.id}
@@ -334,11 +339,11 @@ export default function SubscriptionCatalog() {
                     <td>{service.inquiryOnly ? 'Custom quote' : unitUsd === null ? '—' : unitUsd === 0 ? 'Included' : `${formatUsd(unitUsd)} / ${rateSuffix}`}</td>
                     <td onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
                       {adjustable ? (
-                        <div className="month-stepper" aria-label={`Select ${unit === 'day' ? 'days' : 'months'} for ${service.name}`}>
+                        <div className="month-stepper" aria-label={`Select ${unitPluralAria} for ${service.name}`}>
                           <button
                             type="button"
                             className="month-stepper-btn"
-                            aria-label={`Decrease ${unit === 'day' ? 'days' : 'months'} for ${service.name}`}
+                            aria-label={`Decrease ${unitPluralAria} for ${service.name}`}
                             disabled={units <= minUnits}
                             onClick={() => updateServiceMonths(service, -1)}
                           >
@@ -350,7 +355,7 @@ export default function SubscriptionCatalog() {
                           <button
                             type="button"
                             className="month-stepper-btn"
-                            aria-label={`Increase ${unit === 'day' ? 'days' : 'months'} for ${service.name}`}
+                            aria-label={`Increase ${unitPluralAria} for ${service.name}`}
                             disabled={units >= maxUnits}
                             onClick={() => updateServiceMonths(service, 1)}
                           >
@@ -443,7 +448,7 @@ export default function SubscriptionCatalog() {
           </ul>
           <dl className="package-details-pricing">
             <div>
-              <dt>{selectedUnit === 'day' ? 'Daily rate' : 'Monthly rate'}</dt>
+              <dt>{selectedUnit === 'day' ? 'Daily rate' : selectedUnit === 'year' ? 'Yearly rate' : 'Monthly rate'}</dt>
               <dd>{selectedPackage.inquiryOnly ? 'Custom quote' : selectedUnitUsd === null ? 'One-time fee' : selectedUnitUsd === 0 ? 'Included' : `${formatUsd(selectedUnitUsd)} / ${selectedUnit}`}</dd>
             </div>
             <div>
@@ -454,7 +459,7 @@ export default function SubscriptionCatalog() {
                     <button
                       type="button"
                       className="month-stepper-btn"
-                      aria-label={`Decrease ${selectedUnit === 'day' ? 'days' : 'months'} for ${selectedPackage.name}`}
+                      aria-label={`Decrease ${selectedUnit === 'day' ? 'days' : selectedUnit === 'year' ? 'years' : 'months'} for ${selectedPackage.name}`}
                       disabled={selectedMonths <= selectedMinUnits}
                       onClick={() => updateServiceMonths(selectedPackage, -1)}
                     >
@@ -464,7 +469,7 @@ export default function SubscriptionCatalog() {
                     <button
                       type="button"
                       className="month-stepper-btn"
-                      aria-label={`Increase ${selectedUnit === 'day' ? 'days' : 'months'} for ${selectedPackage.name}`}
+                      aria-label={`Increase ${selectedUnit === 'day' ? 'days' : selectedUnit === 'year' ? 'years' : 'months'} for ${selectedPackage.name}`}
                       disabled={selectedMonths >= selectedMaxUnits}
                       onClick={() => updateServiceMonths(selectedPackage, 1)}
                     >

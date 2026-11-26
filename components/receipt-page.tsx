@@ -23,7 +23,7 @@ export interface ReceiptItem {
   monthly: number;
   total: number;
   months?: number;
-  billingUnit?: 'month' | 'day';
+  billingUnit?: 'month' | 'day' | 'year';
   termLabel?: string;
   billingPeriod?: string;
   customerEmail?: string;
@@ -257,10 +257,10 @@ function ReceiptPageContent({ receipt }: Props) {
 
   // Billing term + dynamic NGN conversion computation
   const billingMonths = receipt.months ?? 12;
-  const billingUnit = receipt.billingUnit === 'day' ? 'day' : 'month';
-  const billingUnitSingular = billingUnit === 'day' ? 'day' : 'month';
-  const billingUnitPlural = billingUnit === 'day' ? 'days' : 'months';
-  const billingUnitShort = billingUnit === 'day' ? 'day' : 'mo';
+  const billingUnit = receipt.billingUnit === 'day' ? 'day' : receipt.billingUnit === 'year' ? 'year' : 'month';
+  const billingUnitSingular = billingUnit;
+  const billingUnitPlural = billingUnit === 'day' ? 'days' : billingUnit === 'year' ? 'years' : 'months';
+  const billingUnitShort = billingUnit === 'day' ? 'day' : billingUnit === 'year' ? 'yr' : 'mo';
   const billingMemo = receipt.billingPeriod || FIXED_MEMO;
   const recipientEmail = receipt.customerEmail || FIXED_EMAIL;
   const ngnEquivalent = Math.round(receipt.total * usdToNgnRate * 100) / 100;

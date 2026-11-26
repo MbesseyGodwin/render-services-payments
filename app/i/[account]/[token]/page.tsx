@@ -27,10 +27,14 @@ export default async function ScrambledInvoicePage({ params }: PageProps) {
     notFound();
   }
 
-  const unitSuffix = decoded.billingUnit === 'day' ? 'd' : 'm';
+  const unitSuffix = decoded.billingUnit === 'day' ? 'd' : decoded.billingUnit === 'year' ? 'y' : 'm';
+  const serviceName =
+    decoded.service.id === 'wildcard-ucc-ssl'
+      ? `Wildcard UCC SSL Certificates ${decoded.months} ${decoded.months === 1 ? 'year' : 'years'}`
+      : decoded.service.checkoutName;
   const receipt: ReceiptItem = {
     id: `${decoded.service.id}-${decoded.months}${unitSuffix}`,
-    name: decoded.service.checkoutName,
+    name: serviceName,
     qty: 1,
     unitPriceStr: `$${decoded.monthlyUsd.toFixed(4)}`,
     monthly: decoded.monthlyUsd,

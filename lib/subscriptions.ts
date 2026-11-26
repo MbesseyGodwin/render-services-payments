@@ -1,4 +1,4 @@
-export type BillingUnit = 'month' | 'day'
+export type BillingUnit = 'month' | 'day' | 'year'
 
 export interface ManagedServicePackage {
   id: string
@@ -11,6 +11,7 @@ export interface ManagedServicePackage {
   billingUnit?: BillingUnit
   monthlyUsd?: number | null
   dailyUsd?: number | null
+  yearlyUsd?: number | null
   checkoutBillingPeriod?: string
   checkoutEmail?: string
   billable?: boolean
@@ -474,17 +475,18 @@ export const managedServicePackages: readonly ManagedServicePackage[] = [
     id: 'wildcard-ucc-ssl',
     name: 'Wildcard UCC SSL Certificates (1 year)',
     checkoutName: 'Wildcard UCC SSL Certificates 1 year',
-    description: 'Wildcard UCC SSL Certificates 1 year — this is not included in your bill.',
+    description: 'Wildcard UCC SSL Certificates 1 year',
     amountUsd: 620,
+    billingUnit: 'year',
+    yearlyUsd: 620,
     monthlyUsd: null,
-    termMonths: 0,
+    termMonths: 1,
     termLabel: '1 year',
-    checkoutBillingPeriod: 'Wildcard UCC SSL Certificates 1 year — This is not included in your bill',
+    checkoutBillingPeriod: 'Wildcard UCC SSL Certificates 1 year',
     checkoutEmail: 'tegaekoh@ccfng.org',
     category: 'Operations',
     highlights: [
-      'Wildcard UCC SSL Certificates (1 year)',
-      'This is not included in your bill',
+      'Wildcard UCC SSL Certificates ($620)',
     ],
   },
 ]
@@ -494,6 +496,8 @@ export const MIN_BILLING_MONTHS = 1
 export const MAX_BILLING_MONTHS = 60
 export const MIN_BILLING_DAYS = 1
 export const MAX_BILLING_DAYS = 365
+export const MIN_BILLING_YEARS = 1
+export const MAX_BILLING_YEARS = 10
 
 export function getManagedServicePackage(id: unknown): ManagedServicePackage | undefined {
   if (typeof id !== 'string') return undefined
@@ -501,11 +505,16 @@ export function getManagedServicePackage(id: unknown): ManagedServicePackage | u
 }
 
 export function getBillingUnit(service: ManagedServicePackage): BillingUnit {
-  return service.billingUnit === 'day' ? 'day' : 'month'
+  if (service.billingUnit === 'day') return 'day'
+  if (service.billingUnit === 'year') return 'year'
+  return 'month'
 }
 
 export function getMaxBillingUnits(service: ManagedServicePackage): number {
-  return getBillingUnit(service) === 'day' ? MAX_BILLING_DAYS : MAX_BILLING_MONTHS
+  const unit = getBillingUnit(service)
+  if (unit === 'day') return MAX_BILLING_DAYS
+  if (unit === 'year') return MAX_BILLING_YEARS
+  return MAX_BILLING_MONTHS
 }
 
 export function isMonthlyAdjustable(service: ManagedServicePackage): boolean {
@@ -514,8 +523,16 @@ export function isMonthlyAdjustable(service: ManagedServicePackage): boolean {
 
 export function getUnitUsd(service: ManagedServicePackage): number | null {
   if (service.inquiryOnly) return null
-  if (getBillingUnit(service) === 'day') {
+  const unit = getBillingUnit(service)
+  if (unit === 'day') {
     if (service.dailyUsd !== undefined) return service.dailyUsd
+    if (service.termMonths > 0) {
+      return Math.round((service.amountUsd / service.termMonths) * 100) / 100
+    }
+    return null
+  }
+  if (unit === 'year') {
+    if (service.yearlyUsd !== undefined) return service.yearlyUsd
     if (service.termMonths > 0) {
       return Math.round((service.amountUsd / service.termMonths) * 100) / 100
     }
@@ -529,14 +546,15 @@ export function getUnitUsd(service: ManagedServicePackage): number | null {
 }
 
 export function getMonthlyUsd(service: ManagedServicePackage): number | null {
-  if (getBillingUnit(service) === 'day') return null
+  if (getBillingUnit(service) !== 'month') return null
   return getUnitUsd(service)
 }
 
 export function clampBillingMonths(service: ManagedServicePackage, units?: number): number {
   if (!isMonthlyAdjustable(service)) return 0
   if (typeof units !== 'number' || !Number.isFinite(units)) return service.termMonths
-  const minUnits = getBillingUnit(service) === 'day' ? MIN_BILLING_DAYS : MIN_BILLING_MONTHS
+  const unit = getBillingUnit(service)
+  const minUnits = unit === 'day' ? MIN_BILLING_DAYS : unit === 'year' ? MIN_BILLING_YEARS : MIN_BILLING_MONTHS
   const maxUnits = getMaxBillingUnits(service)
   return Math.min(maxUnits, Math.max(minUnits, Math.round(units)))
 }
@@ -556,6 +574,9 @@ export function formatTermLabel(service: ManagedServicePackage, units?: number):
   const unit = getBillingUnit(service)
   if (unit === 'day') {
     return `${safeUnits} ${safeUnits === 1 ? 'day' : 'days'}`
+  }
+  if (unit === 'year') {
+    return `${safeUnits} ${safeUnits === 1 ? 'year' : 'years'}`
   }
   return `${safeUnits} ${safeUnits === 1 ? 'month' : 'months'}`
 }
@@ -579,6 +600,14 @@ export function formatBillingPeriod(service: ManagedServicePackage, units?: numb
     if (safeUnits === 1) {
       return `Render ${formatter.format(startDate)} (1 day)`
     }
+    return `Render ${formatter.format(startDate)} - ${formatter.format(endDate)} (${safeUnits} ${label})`
+  }
+  if (unit === 'year') {
+    const label = safeUnits === 1 ? 'year' : 'years'
+    if (service.id === 'wildcard-ucc-ssl') {
+      return `Wildcard UCC SSL Certificates ${safeUnits} ${label}`
+    }
+    const endDate = new Date(Date.UTC(2026 + safeUnits, 9, 0))
     return `Render ${formatter.format(startDate)} - ${formatter.format(endDate)} (${safeUnits} ${label})`
   }
   const endDate = new Date(Date.UTC(2026, 9 + safeUnits, 0))
@@ -657,7 +686,7 @@ export function parseScrambledInvoiceToken(account: string, token: string): Deco
   if (!Number.isInteger(parsedUnits)) return null
 
   const billingUnit = getBillingUnit(service)
-  const minUnits = billingUnit === 'day' ? MIN_BILLING_DAYS : MIN_BILLING_MONTHS
+  const minUnits = billingUnit === 'day' ? MIN_BILLING_DAYS : billingUnit === 'year' ? MIN_BILLING_YEARS : MIN_BILLING_MONTHS
   const maxUnits = getMaxBillingUnits(service)
 
   if (isMonthlyAdjustable(service)) {
