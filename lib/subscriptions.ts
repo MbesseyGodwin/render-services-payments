@@ -470,6 +470,23 @@ export const managedServicePackages: readonly ManagedServicePackage[] = [
     category: 'Operations',
     highlights: ['Cross-region encrypted replication', 'Documented failover readiness'],
   },
+  {
+    id: 'wildcard-ucc-ssl',
+    name: 'Wildcard UCC SSL Certificates (1 year)',
+    checkoutName: 'Wildcard UCC SSL Certificates 1 year',
+    description: 'Wildcard UCC SSL Certificates 1 year — this is not included in your bill.',
+    amountUsd: 620,
+    monthlyUsd: null,
+    termMonths: 0,
+    termLabel: '1 year',
+    checkoutBillingPeriod: 'Wildcard UCC SSL Certificates 1 year — This is not included in your bill',
+    checkoutEmail: 'tegaekoh@ccfng.org',
+    category: 'Operations',
+    highlights: [
+      'Wildcard UCC SSL Certificates (1 year)',
+      'This is not included in your bill',
+    ],
+  },
 ]
 
 export const SCRAMBLED_INVOICE_ACCOUNT = 'acct_1CTbIsBmBV2o9vP5'

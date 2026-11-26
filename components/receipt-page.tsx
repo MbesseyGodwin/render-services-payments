@@ -24,6 +24,7 @@ export interface ReceiptItem {
   total: number;
   months?: number;
   billingUnit?: 'month' | 'day';
+  termLabel?: string;
   billingPeriod?: string;
   customerEmail?: string;
   scrambledPath: string;
@@ -847,7 +848,7 @@ function ReceiptPageContent({ receipt }: Props) {
               <h2>Invoice Details</h2>
               <p><strong>Item:</strong> {receipt.name}</p>
               <p><strong>Quantity:</strong> 1</p>
-              <p><strong>Unit Price:</strong> {billingMonths > 0 ? `${receipt.unitPriceStr} / ${billingUnitSingular} × ${billingMonths} ${billingMonths === 1 ? billingUnitSingular : billingUnitPlural}` : `${receipt.unitPriceStr} (One-time)`}</p>
+              <p><strong>Unit Price:</strong> {billingMonths > 0 ? `${receipt.unitPriceStr} / ${billingUnitSingular} × ${billingMonths} ${billingMonths === 1 ? billingUnitSingular : billingUnitPlural}` : `${receipt.unitPriceStr} (${receipt.termLabel || 'One-time'})`}</p>
               <p><strong>Billing Period:</strong> {billingMemo}</p>
               <p><strong>Total:</strong> {formatUSD(receipt.total)}</p>
             </div>
@@ -982,7 +983,7 @@ function ReceiptPageContent({ receipt }: Props) {
             <div className="drawer-item-qty">
               {billingMonths > 0
                 ? `Qty ${receipt.qty} · ${billingMonths} ${billingMonths === 1 ? billingUnitSingular : billingUnitPlural} (${formatUSD(receipt.monthly)}/${billingUnitShort})`
-                : `Qty ${receipt.qty} · One-time setup fee (${formatUSD(receipt.total)})`}
+                : `Qty ${receipt.qty} · ${receipt.termLabel || 'One-time'} (${formatUSD(receipt.total)})`}
             </div>
           </div>
 
@@ -1189,6 +1190,10 @@ function ReceiptPageContent({ receipt }: Props) {
                 <tr>
                   <th scope="row">Status</th>
                   <td className="success-modal-status-paid">Paid</td>
+                </tr>
+                <tr>
+                  <th scope="row">Service</th>
+                  <td>{receipt.name}</td>
                 </tr>
                 <tr>
                   <th scope="row">Amount</th>

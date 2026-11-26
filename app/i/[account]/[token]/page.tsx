@@ -37,6 +37,7 @@ export default async function ScrambledInvoicePage({ params }: PageProps) {
     total: decoded.totalUsd,
     months: decoded.months,
     billingUnit: decoded.billingUnit,
+    termLabel: decoded.service.termLabel,
     billingPeriod: decoded.billingPeriod,
     customerEmail: decoded.customerEmail,
     scrambledPath: decoded.scrambledPath,

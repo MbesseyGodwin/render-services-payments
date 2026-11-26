@@ -64,7 +64,11 @@ export async function POST(request: Request) {
       typeof billingPeriod === 'string' && billingPeriod.trim()
         ? billingPeriod.trim().slice(0, 120)
         : 'Render Oct 1, 2026 - Sep 30, 2027';
-    const descriptionText = `Payment for ${serviceName || 'Render Service'} (${resolvedBillingPeriod})`;
+    const normalizedServiceName = typeof serviceName === 'string' ? serviceName.trim() : '';
+    const descriptionText =
+      normalizedServiceName && resolvedBillingPeriod.toLowerCase().includes(normalizedServiceName.toLowerCase())
+        ? `Payment for ${resolvedBillingPeriod}`
+        : `Payment for ${normalizedServiceName || 'Render Service'} (${resolvedBillingPeriod})`;
 
     const paystackRes = await fetch('https://api.paystack.co/transaction/initialize', {
       method: 'POST',
