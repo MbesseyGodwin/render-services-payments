@@ -62,6 +62,24 @@ export const managedServicePackages: readonly ManagedServicePackage[] = [
     category: 'Compute',
     highlights: ['Pro Plus · 8 GB RAM · 4 CPU', 'Managed subscription administration'],
   },
+  ...(
+    [
+      { tier: 1, amountUsd: 235 },
+      { tier: 2, amountUsd: 240 },
+      { tier: 3, amountUsd: 245 },
+    ] as const
+  ).map(({ tier, amountUsd }): ManagedServicePackage => ({
+    id: `frontend-tier-${tier}`,
+    name: `Render Frontend Server (Pro Plus, 8GB/4CPU) Tier ${tier}`,
+    checkoutName: `Render Frontend Server (Pro Plus, 8GB/4CPU) Tier ${tier}`,
+    description: `Managed hosting for customer-facing websites and web applications (Tier ${tier}).`,
+    amountUsd,
+    monthlyUsd: amountUsd,
+    termMonths: 1,
+    termLabel: '1 month',
+    category: 'Compute',
+    highlights: [`Pro Plus · 8 GB RAM · 4 CPU · Tier ${tier}`, 'Managed subscription administration'],
+  })),
   {
     id: 'postgresql',
     name: 'PostgreSQL Primary',
